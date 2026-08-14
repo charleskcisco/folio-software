@@ -853,13 +853,20 @@ def test_ensure_writable():
         print("  (skipped: running as root)")
         return
     with tempfile.TemporaryDirectory() as tmpdir:
-        d = Path(tmpdir) / "ro"
-        d.mkdir()
-        os.chmod(d, 0o555)
-        assert not os.access(d, os.W_OK)
-        assert _ensure_writable(d) is True
-        assert os.access(d, os.W_OK)
-        os.chmod(d, 0o755)
+        # The repair path is POSIX-only by nature: Windows carries the
+        # read-only bit on files, not directories, so os.chmod cannot
+        # make one unwritable and the precondition simply cannot be set
+        # up. Permissions there are ACLs, which chmod does not touch --
+        # so _ensure_writable's mkdir half is all that runs, and that is
+        # exercised by the nested case below.
+        if sys.platform != "win32":
+            d = Path(tmpdir) / "ro"
+            d.mkdir()
+            os.chmod(d, 0o555)
+            assert not os.access(d, os.W_OK)
+            assert _ensure_writable(d) is True
+            assert os.access(d, os.W_OK)
+            os.chmod(d, 0o755)
         # Missing directories are created
         nested = Path(tmpdir) / "new" / "nested"
         assert _ensure_writable(nested) is True
