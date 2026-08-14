@@ -4408,12 +4408,14 @@ def create_app(storage):
             # writerdeck, so write the full command, exit code, and output
             # somewhere durable.
             #
-            # This lives under the config dir, not the vault: the vault is
-            # the user's own writing and syncs to every other device, and
-            # a crash log has no business in it. Same place filebrowser's
-            # log and db already go. Returns a display path, or None.
+            # It goes in a hidden folder in the vault, not the config dir:
+            # on a writerdeck the vault is the only thing readable without
+            # dropping to a shell, and a failed export is exactly when you
+            # cannot afford that. Hidden keeps it out of the way -- and
+            # iter_md_paths already skips dot-directories, so it never
+            # shows up in the browser. Returns a vault-relative path.
             try:
-                log_dir = _config_path().parent / "logs"
+                log_dir = state.storage.vault_dir / ".journal"
                 log_dir.mkdir(parents=True, exist_ok=True)
                 log = log_dir / "export-error.log"
                 log.write_text(
@@ -4426,9 +4428,10 @@ def create_app(storage):
                     f"--- stdout ---\n{result.stdout or ''}\n"
                     f"--- stderr ---\n{result.stderr or ''}\n",
                     encoding="utf-8")
-                # Full path, not just the filename: the log is no longer
-                # sitting in the vault where the user would stumble on it.
-                return _fmt_dest(log)
+                # Vault-relative: short enough for a truncated notification
+                # and it says where to look, which a bare filename does not
+                # now that the log sits in a hidden folder.
+                return str(log.relative_to(state.storage.vault_dir))
             except OSError:
                 return None
 
