@@ -22,7 +22,7 @@ from journal import (
     _lua_coverpage_filter, _lua_header_filter,
     _postprocess_docx, _REFS_DIR,
     _author_lastname, _format_export_date, _typst_str, _typst_wrapper,
-    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _dedupe_bib, _strip_bib_noise, _initial_pdf_engine,
+    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _dedupe_bib, _strip_bib_noise, _initial_pdf_engine, _strip_frontmatter,
     _list_continuation, _ensure_writable, MarkdownLexer,
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
     _env_bin, _config_path, _default_vault, _normalise_pasted,
@@ -515,6 +515,34 @@ def test_initial_pdf_engine():
         finally:
             J._config_path = orig
     print("  Initial PDF engine OK")
+
+
+def test_strip_frontmatter():
+    # An unquoted colon in a title is valid to Journal's parser and fatal
+    # to pandoc's. The Typst path does not need pandoc to read metadata,
+    # so the block is removed before it can be rejected.
+    doc = ("---\n"
+           "title: Freedom in Galatians: Conclusion\n"
+           "author: Charles Cisco\n"
+           "---\n"
+           "# Heading\n\nBody text.\n")
+    body = _strip_frontmatter(doc)
+    assert body.startswith("# Heading")
+    assert "title:" not in body and "Charles Cisco" not in body
+    # Journal's own parser still gets the colon title right.
+    assert parse_yaml_frontmatter(doc)["title"] == "Freedom in Galatians: Conclusion"
+
+    # No frontmatter: unchanged.
+    plain = "# Just a heading\n\nText.\n"
+    assert _strip_frontmatter(plain) == plain
+
+    # A --- rule in the body must not be mistaken for a fence.
+    mid = "Text.\n\n---\n\nMore text.\n"
+    assert _strip_frontmatter(mid) == mid
+
+    # Empty frontmatter still strips.
+    assert _strip_frontmatter("---\n\n---\nBody\n") == "Body\n"
+    print("  Frontmatter stripping OK")
 
 
 def test_bundled_bin():
@@ -1237,6 +1265,7 @@ if __name__ == "__main__":
     test_typst_template_exists()
     test_pdf_engine_routing()
     test_resolve_bib_path()
+    test_strip_frontmatter()
     test_dedupe_bib()
     test_strip_bib_noise()
     test_initial_pdf_engine()

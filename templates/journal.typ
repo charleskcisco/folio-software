@@ -133,11 +133,7 @@
   // Hanging indent 720tw = 0.5in, matching the Lua filter, and the heading
   // starts on a new page as the filter's pageBreakBefore did.
   //
-  // The CSL style is deliberately chicago-author-date for every style:,
-  // because the pandoc chain passes a bare --citeproc with no --csl and so
-  // uses citeproc's Chicago author-date default regardless of what style:
-  // says. Matching that keeps the engine comparison honest — changing the
-  // citation style and the renderer at the same time would confound it.
+  // chicago-author-date matches what citeproc uses by default.
   if bib != none {
     pagebreak(weak: true)
     set par(hanging-indent: 0.5in)

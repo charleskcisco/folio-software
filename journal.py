@@ -1204,6 +1204,26 @@ def _strip_bib_noise(text: str) -> tuple[str, int]:
     return "".join(out), removed
 
 
+def _strip_frontmatter(content: str) -> str:
+    """Drop the YAML frontmatter block, keeping the body.
+
+    The Typst path never needs pandoc to read the metadata -- Journal
+    parses it itself and passes it to the template as arguments. Handing
+    pandoc the block anyway only exposes the export to pandoc's strict
+    YAML parser, which rejects things Journal accepts happily. An
+    unquoted colon in a title is the common one:
+
+        title: Freedom and Slavery in Galatians: Conclusion
+
+    YAML reads that second colon as a nested mapping and refuses the
+    whole document; Journal's own parser splits on the first colon and
+    gets the right answer. Academic titles are full of colons, so this
+    would otherwise fail routinely.
+    """
+    m = re.match(r"^---\n(.*?)\n---[ \t]*\n?", content, re.DOTALL)
+    return content[m.end():] if m else content
+
+
 def _initial_pdf_engine(cfg: dict) -> str:
     """Which PDF engine a device starts on, given its saved config.
 
@@ -4588,8 +4608,18 @@ def create_app(storage):
                 bib_src = (_resolve_bib_path(yaml, state.storage.vault_dir)
                            if "bibliography" in yaml else None)
 
+                # Hand pandoc the body only. The template gets its metadata
+                # from Journal's own parse, so pandoc has no need of the
+                # frontmatter -- and feeding it the block only exposes the
+                # export to pandoc's strict YAML parser, which rejects the
+                # unquoted colons that academic titles are full of.
+                body_md = Path(tmp_dir) / "body.md"
+                await loop.run_in_executor(
+                    None, lambda: body_md.write_text(
+                        _strip_frontmatter(content), encoding="utf-8"))
+
                 body_path = Path(tmp_dir) / "body.typ"
-                pandoc_args = [pandoc, str(md_path)]
+                pandoc_args = [pandoc, str(body_md)]
                 if not bib_src:
                     pandoc_args += ["--from", "markdown-citations"]
                 pandoc_args += ["--to", "typst", "-o", str(body_path)]
