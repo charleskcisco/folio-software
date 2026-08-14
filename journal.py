@@ -5655,16 +5655,27 @@ def main() -> None:
             data_dir = Path(answer.strip()).expanduser()
             _save_config({"vault": str(data_dir)})
 
-    # Disable terminal dsusp (^Y) so Ctrl+Y reaches the application
+    # Disable terminal dsusp (^Y) so Ctrl+Y reaches the application.
+    #
+    # POSIX only. The import must be guarded separately: when it fails
+    # (Windows has no termios), Python still evaluates the handler's
+    # exception tuple, and naming termios.error there raises
+    # UnboundLocalError -- which the handler does not catch, killing the
+    # app at startup before it draws anything.
+    #
+    # VDSUSP itself is BSD/macOS; Linux lacks it, hence AttributeError.
     try:
         import termios
-        fd = sys.stdin.fileno()
-        attrs = termios.tcgetattr(fd)
-        VDSUSP = termios.VDSUSP
-        attrs[6][VDSUSP] = b'\x00'
-        termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    except (ImportError, AttributeError, termios.error):
-        pass
+    except ImportError:
+        termios = None
+    if termios is not None:
+        try:
+            fd = sys.stdin.fileno()
+            attrs = termios.tcgetattr(fd)
+            attrs[6][termios.VDSUSP] = b'\x00'
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        except (AttributeError, ValueError, OSError, termios.error):
+            pass
 
     app = create_app(VaultStorage(data_dir))
     result = app.run(pre_run=getattr(app, "start_background_tasks", None))
