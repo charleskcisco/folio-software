@@ -14,6 +14,21 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+
+    env:
+      # The inline `shell: python` steps run from a temp file, so the
+      # checkout is not on sys.path and `import journal` fails.
+      PYTHONPATH: ${{ github.workspace }}
+
+      # Console encoding only. Windows defaults stdout to cp1252, so the
+      # suite's own progress output dies on its first tick mark -- which
+      # says nothing about the code under test.
+      #
+      # Deliberately NOT PYTHONUTF8/-X utf8: that would switch the
+      # *file* encoding default to UTF-8 as well and quietly make this
+      # whole job stop testing the thing it exists to test.
+      PYTHONIOENCODING: utf-8
+
     strategy:
       # Don't let the first red platform cancel the others: when Windows
       # breaks we want to know whether Linux and macOS broke with it.
