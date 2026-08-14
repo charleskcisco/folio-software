@@ -29,6 +29,18 @@ case "$(uname -m)" in
         ;;
 esac
 
+# The release is .tar.xz and GNU tar shells out to xz to read it. This
+# script is meant to be runnable on its own on an existing device, where
+# app-setup.sh (which installs xz-utils) has not necessarily been re-run.
+if ! command -v xz >/dev/null 2>&1; then
+    echo "xz not found; installing xz-utils..."
+    sudo apt-get install -y xz-utils || {
+        echo "Could not install xz-utils. Install it and re-run:" >&2
+        echo "  sudo apt install xz-utils" >&2
+        exit 1
+    }
+fi
+
 URL="https://github.com/typst/typst/releases/latest/download/typst-${TARGET}.tar.xz"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -37,5 +49,19 @@ echo "Downloading typst (${TARGET})..."
 curl -fsSL "$URL" -o "${TMP}/typst.tar.xz"
 tar -xJf "${TMP}/typst.tar.xz" -C "$TMP"
 
-sudo install -m 0755 "${TMP}/typst-${TARGET}/typst" /usr/local/bin/typst
+BIN="${TMP}/typst-${TARGET}/typst"
+[ -f "$BIN" ] || { echo "Unexpected archive layout: $BIN missing" >&2; exit 1; }
+
+# Confirm the binary actually runs on this machine before installing it.
+# A wrong-architecture build downloads and unpacks perfectly happily and
+# only fails later, at export time, as a confusing "Exec format error".
+chmod +x "$BIN"
+if ! "$BIN" --version >/dev/null 2>&1; then
+    echo "Downloaded typst will not run on this machine ($(uname -m))." >&2
+    echo "Wrong build for this architecture; install typst manually or" >&2
+    echo "leave Options > PDF engine on libreoffice." >&2
+    exit 1
+fi
+
+sudo install -m 0755 "$BIN" /usr/local/bin/typst
 echo "Installed: $(typst --version)"
