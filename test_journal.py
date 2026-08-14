@@ -25,6 +25,8 @@ from journal import (
     _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR,
     _list_continuation, _ensure_writable, MarkdownLexer,
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
+    _env_bin, _config_path, _default_vault, _normalise_pasted,
+    _detect_clipboard, _no_console,
 )
 
 
@@ -425,6 +427,179 @@ def test_bundled_bin():
     # path -- otherwise detect_* would return a binary that cannot run.
     assert _bundled_bin("definitely-not-a-real-tool") is None
     print("  Bundled binary lookup OK")
+
+
+def test_env_bin():
+    # An unset or empty variable must fall through to the other lookups
+    # rather than returning "" and short-circuiting them.
+    os.environ.pop("JOURNAL_TEST_BIN", None)
+    assert _env_bin("JOURNAL_TEST_BIN") is None
+    os.environ["JOURNAL_TEST_BIN"] = ""
+    assert _env_bin("JOURNAL_TEST_BIN") is None
+
+    # A path that does not exist is worse than useless: honouring it
+    # would report a tool as present and then fail at export time.
+    os.environ["JOURNAL_TEST_BIN"] = "/nonexistent/pandoc"
+    assert _env_bin("JOURNAL_TEST_BIN") is None
+
+    with tempfile.NamedTemporaryFile(suffix="-pandoc") as tf:
+        os.environ["JOURNAL_TEST_BIN"] = tf.name
+        assert _env_bin("JOURNAL_TEST_BIN") == tf.name
+    os.environ.pop("JOURNAL_TEST_BIN", None)
+    print("  Env-var binary override OK")
+
+
+def test_env_bin_wins_in_detectors():
+    # The whole point of the override: a Tauri sidecar stored under a
+    # target-triple name must beat anything found on PATH.
+    with tempfile.NamedTemporaryFile(suffix="-aarch64-apple-darwin") as tf:
+        os.environ["JOURNAL_PANDOC"] = tf.name
+        os.environ["JOURNAL_TYPST"] = tf.name
+        try:
+            assert detect_pandoc() == tf.name
+            assert detect_typst() == tf.name
+        finally:
+            os.environ.pop("JOURNAL_PANDOC", None)
+            os.environ.pop("JOURNAL_TYPST", None)
+    print("  Sidecar override beats PATH OK")
+
+
+def test_config_path():
+    p = _config_path()
+    assert p.name == "config.json"
+    assert p.parent.name == "journal"
+    # POSIX must keep the path every existing writerdeck already uses;
+    # moving it would strand their configured vault.
+    if sys.platform != "win32":
+        assert p == Path.home() / ".config" / "journal" / "config.json"
+    print("  Config path OK")
+
+
+def test_default_vault():
+    v = _default_vault()
+    assert v.name == "Journal"
+    assert v.parent == Path.home() / "Documents"
+    # Must not create anything as a side effect of being asked.
+    print("  Default vault location OK")
+
+
+def test_normalise_pasted():
+    # POSIX pastes must pass through untouched -- pbpaste and
+    # wl-paste --no-newline already return exactly the right bytes.
+    if sys.platform != "win32":
+        assert _normalise_pasted("a\r\nb\n") == "a\r\nb\n"
+        print("  Paste normalisation is POSIX no-op OK")
+        return
+    assert _normalise_pasted("a\r\nb\r\n") == "a\nb"
+    assert _normalise_pasted("plain") == "plain"
+    assert _normalise_pasted("") == ""
+    print("  Paste normalisation OK")
+
+
+def test_no_console():
+    kwargs = _no_console()
+    if sys.platform == "win32":
+        assert "creationflags" in kwargs
+    else:
+        # Must be empty on POSIX: passing creationflags there is a
+        # TypeError, so every shell-out would break at once.
+        assert kwargs == {}
+    print("  No-console subprocess kwargs OK")
+
+
+def test_detect_clipboard_shape():
+    copy_cmd, paste_cmd = _detect_clipboard()
+    # Detection is allowed to find nothing (headless CI, no wl-copy), but
+    # it must never return a half-pair -- _try_paste guards on the paste
+    # command alone and would then run a copy command as a paste.
+    assert (copy_cmd is None) == (paste_cmd is None)
+    if copy_cmd is not None:
+        assert isinstance(copy_cmd, list) and isinstance(paste_cmd, list)
+    print("  Clipboard detection shape OK")
+
+
+class _as_platform:
+    """Run a block as though on another OS.
+
+    The Windows branches are the reason this phase exists, and a Mac can
+    never reach them otherwise -- so they would ship having never once
+    been executed. Every shim reads sys.platform at call time, which is
+    what makes this possible; keep it that way.
+    """
+
+    def __init__(self, name, **env):
+        self.name = name
+        self.env = env
+
+    def __enter__(self):
+        self._real = sys.platform
+        self._saved = {k: os.environ.get(k) for k in self.env}
+        sys.platform = self.name
+        for k, v in self.env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        return self
+
+    def __exit__(self, *exc):
+        sys.platform = self._real
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        return False
+
+
+def test_config_path_windows():
+    with _as_platform("win32", APPDATA=r"C:\Users\Kid\AppData\Roaming"):
+        p = _config_path()
+        assert p.parts[-2:] == ("journal", "config.json"), p
+        assert "Roaming" in str(p), p
+
+    # A missing APPDATA must not put config in ~/.config on Windows or
+    # crash on Path(None) -- it falls back to the standard location.
+    with _as_platform("win32", APPDATA=None):
+        p = _config_path()
+        assert "Roaming" in str(p), p
+        assert ".config" not in str(p), p
+    print("  Windows config path OK")
+
+
+def test_normalise_pasted_windows():
+    with _as_platform("win32"):
+        # CRLF would otherwise leave stray \r rendering as control chars.
+        assert _normalise_pasted("a\r\nb\r\n") == "a\nb"
+        # Bare CR too, which some apps still put on the clipboard.
+        assert _normalise_pasted("a\rb") == "a\nb"
+        # Only ONE trailing newline is PowerShell's; a deliberate blank
+        # line at the end of a copied passage must survive.
+        assert _normalise_pasted("a\r\n\r\n") == "a\n"
+        assert _normalise_pasted("plain") == "plain"
+        assert _normalise_pasted("") == ""
+    print("  Windows paste normalisation OK")
+
+
+def test_no_console_windows():
+    with _as_platform("win32"):
+        kwargs = _no_console()
+        assert "creationflags" in kwargs
+        # Zero would silently mean "no flag", so a console could still
+        # flash; the constant must actually have been found.
+        assert kwargs["creationflags"] != 0
+    print("  Windows no-console flag OK")
+
+
+def test_powershell_paste_command():
+    # Both halves matter and neither is obvious, so pin them: -Raw keeps
+    # the clipboard as one string instead of an array of lines, and the
+    # UTF-8 line stops the console codepage mangling curly quotes.
+    joined = " ".join(journal._PS_PASTE)
+    assert "-Raw" in joined
+    assert "UTF8" in joined
+    assert "-NoProfile" in joined
+    print("  PowerShell paste command OK")
 
 
 def test_postprocess_docx():
@@ -855,6 +1030,20 @@ if __name__ == "__main__":
     print("Testing tool detection...")
     test_detect_tools()
     print("  \u2713 Tool detection tests passed\n")
+
+    print("Testing cross-platform shims...")
+    test_env_bin()
+    test_env_bin_wins_in_detectors()
+    test_config_path()
+    test_default_vault()
+    test_normalise_pasted()
+    test_no_console()
+    test_detect_clipboard_shape()
+    test_config_path_windows()
+    test_normalise_pasted_windows()
+    test_no_console_windows()
+    test_powershell_paste_command()
+    print("  \u2713 Cross-platform shim tests passed\n")
 
     print("Testing list continuation...")
     test_list_continuation()

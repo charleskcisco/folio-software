@@ -327,6 +327,19 @@ def resolve_reference_doc(yaml: dict) -> Optional[Path]:
     return None
 
 
+def _env_bin(var: str) -> Optional[str]:
+    """A helper binary named by an environment variable, or None.
+
+    Set by a wrapper that already knows where it put its binaries. A
+    bundler may store them under a mangled name -- Tauri suffixes
+    sidecars with the target triple (pandoc-aarch64-apple-darwin), which
+    no amount of searching ./bin or PATH will ever find. Highest
+    precedence, so an explicit path always wins.
+    """
+    p = os.environ.get(var, "").strip()
+    return p if p and os.path.isfile(p) else None
+
+
 def _bundled_bin(name: str) -> Optional[str]:
     """Path to a helper binary shipped with the app, or None.
 
@@ -350,7 +363,8 @@ def _bundled_bin(name: str) -> Optional[str]:
 
 def detect_pandoc() -> Optional[str]:
     """Find the pandoc binary."""
-    found = _bundled_bin("pandoc") or shutil.which("pandoc")
+    found = (_env_bin("JOURNAL_PANDOC") or _bundled_bin("pandoc")
+             or shutil.which("pandoc"))
     if found:
         return found
     for p in [
@@ -366,7 +380,8 @@ def detect_pandoc() -> Optional[str]:
 
 def detect_typst() -> Optional[str]:
     """Find the typst binary (PDF export engine)."""
-    found = _bundled_bin("typst") or shutil.which("typst")
+    found = (_env_bin("JOURNAL_TYPST") or _bundled_bin("typst")
+             or shutil.which("typst"))
     if found:
         return found
     for p in [
@@ -1831,11 +1846,41 @@ def _detect_printers():
     return names
 
 
+def _no_console() -> dict:
+    """subprocess kwargs that stop Windows flashing a console window.
+
+    A windowed build exists precisely so the user never sees a terminal,
+    and every shell-out is a chance to break that promise for a frame.
+    No-op on POSIX.
+    """
+    if sys.platform == "win32":
+        # Fall back to the documented Win32 value rather than to 0: a 0
+        # here means "no flag at all", which is silent failure -- the
+        # console flashes and nothing indicates why.
+        flag = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        return {"creationflags": flag}
+    return {}
+
+
+# PowerShell decodes and encodes in the console codepage by default, which
+# mangles the curly quotes and em dashes a writing app produces constantly.
+# Forcing UTF-8 on the way out costs a few characters of command line and
+# removes a whole class of "my apostrophes turned into junk" reports.
+_PS_PASTE = [
+    "powershell", "-NoProfile", "-Command",
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw",
+]
+
+
 def _detect_clipboard():
     """Detect available clipboard commands once. Returns (copy_cmd, paste_cmd) or (None, None)."""
     if sys.platform == "darwin":
         candidates = [
             (["/usr/bin/pbcopy"], ["/usr/bin/pbpaste"]),       # macOS (absolute path)
+        ]
+    elif sys.platform == "win32":
+        candidates = [
+            (["clip.exe"], _PS_PASTE),                         # Windows
         ]
     else:
         candidates = [
@@ -1847,6 +1892,7 @@ def _detect_clipboard():
             result = subprocess.run(
                 copy_cmd, input="", text=True, timeout=1,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                **_no_console(),
             )
             if result.returncode == 0:
                 return copy_cmd, paste_cmd
@@ -1868,9 +1914,17 @@ def _try_copy(text):
     if not _CLIP_COPY_CMD:
         return False
     try:
+        # clip.exe decodes stdin as the console codepage unless it is
+        # handed UTF-16LE, so encode explicitly rather than trusting
+        # whatever locale the machine happens to have.
+        if sys.platform == "win32":
+            payload, enc = text.encode("utf-16-le"), {}
+        else:
+            payload, enc = text, {"text": True}
         result = subprocess.run(
-            _CLIP_COPY_CMD, input=text, text=True, timeout=2,
+            _CLIP_COPY_CMD, input=payload, timeout=2,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            **enc, **_no_console(),
         )
         return result.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -1881,13 +1935,30 @@ def _try_paste():
     if not _CLIP_PASTE_CMD:
         return None
     try:
+        enc = {"encoding": "utf-8"} if sys.platform == "win32" else {}
         result = subprocess.run(
-            _CLIP_PASTE_CMD, capture_output=True, text=True, timeout=2)
+            _CLIP_PASTE_CMD, capture_output=True, text=True, timeout=2,
+            **enc, **_no_console())
         if result.returncode == 0:
-            return result.stdout
+            return _normalise_pasted(result.stdout)
     except (OSError, subprocess.SubprocessError):
         pass
     return None
+
+
+def _normalise_pasted(text):
+    """Make Windows clipboard text safe to drop into the buffer.
+
+    Two Windows-only quirks, neither of which the POSIX tools have:
+    CRLF line endings, which leave stray \\r rendering as control
+    characters mid-document; and the trailing newline PowerShell's
+    output pipeline appends to Get-Clipboard -Raw -- the same one
+    wl-paste suppresses with --no-newline and pbpaste never adds.
+    """
+    if sys.platform != "win32":
+        return text
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text[:-1] if text.endswith("\n") else text
 
 
 def _clipboard_copy(text):
@@ -5886,6 +5957,16 @@ def create_app(storage):
 
 
 def _config_path() -> Path:
+    """Where config.json lives, per platform.
+
+    Windows has no ~/.config convention; %APPDATA% is the per-user
+    application data location, and it roams with the profile. POSIX keeps
+    the path it has always used, so no existing writerdeck moves.
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA")
+        root = Path(base) if base else Path.home() / "AppData" / "Roaming"
+        return root / "journal" / "config.json"
     return Path.home() / ".config" / "journal" / "config.json"
 
 
@@ -5905,6 +5986,16 @@ def _save_config(cfg: dict) -> None:
     p.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 
 
+def _default_vault() -> Path:
+    """The vault to create when there is no config yet.
+
+    ~/Documents is present and backed up on every platform we target, and
+    on machines signed into iCloud Drive or OneDrive it is often synced
+    already -- which is as much backup as this app needs to arrange.
+    """
+    return Path.home() / "Documents" / "Journal"
+
+
 def main() -> None:
     if os.environ.get("JOURNAL_VAULT"):
         data_dir = Path(os.environ["JOURNAL_VAULT"])
@@ -5913,16 +6004,18 @@ def main() -> None:
         if cfg.get("vault"):
             data_dir = Path(cfg["vault"]).expanduser()
         else:
-            from prompt_toolkit import prompt as pt_prompt
-            default = str(Path.home() / "Documents")
+            # First run: pick a vault rather than asking for one. The old
+            # bare "Vault path:" prompt is the worst first contact the app
+            # has -- it asks a question most users cannot answer, before
+            # anything on screen has explained what a vault is. Anyone who
+            # wants a different location can set it in Options afterwards,
+            # or point JOURNAL_VAULT at it.
+            data_dir = _default_vault()
             try:
-                answer = pt_prompt(
-                    "Vault path: ",
-                    default=default,
-                )
-            except (EOFError, KeyboardInterrupt):
+                data_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                print(f"Could not create {data_dir}: {exc}", file=sys.stderr)
                 return
-            data_dir = Path(answer.strip()).expanduser()
             _save_config({"vault": str(data_dir)})
 
     # Disable terminal dsusp (^Y) so Ctrl+Y reaches the application.
