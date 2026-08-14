@@ -59,17 +59,11 @@
 ) = {
   let leading = if spacing == "single" { leading-single } else { leading-double }
 
-  // pgMar in refs/*.docx: 1440tw = 1in on every side.
-  //
-  // top/bottom used to read 2204/2206tw (1.53in) because LibreOffice, which
-  // authored those files, folds the header allowance into the body margin.
-  // Journal strips the header for every style but MLA, so that allowance
-  // bought nothing and just made the margins look wrong. The reference docs
-  // now say 1440 as well — change one, change the other, or the two engines
-  // stop agreeing.
+  // pgMar: left/right 1440tw = 1in; top 2204tw = 1.531in; bottom 2206tw =
+  // 1.532in; header 1440tw = 1in from the page top.
   set page(
     paper: "us-letter",
-    margin: (left: 1in, right: 1in, top: 1in, bottom: 1in),
+    margin: (left: 1in, right: 1in, top: 1.531in, bottom: 1.532in),
     // Only MLA gets a running head; the docx path achieves the same thing
     // by stripping header XML for every other style.
     header: if style == "mla" and lastname != "" {
