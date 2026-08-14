@@ -22,7 +22,7 @@ from journal import (
     _lua_coverpage_filter, _lua_header_filter,
     _postprocess_docx, _REFS_DIR,
     _author_lastname, _format_export_date, _typst_str, _typst_wrapper,
-    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR,
+    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _dedupe_bib,
     _list_continuation, _ensure_writable, MarkdownLexer,
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
     _env_bin, _config_path, _default_vault, _normalise_pasted,
@@ -420,6 +420,37 @@ def test_resolve_bib_path():
         # Nothing to find at all.
         assert _resolve_bib_path({"bibliography": "x.bib"}, Path(tmpdir)) is None
     print("  Bib path resolution OK")
+
+
+def test_dedupe_bib():
+    # Typst rejects a duplicate key and fails the whole compile, where
+    # citeproc tolerates it -- so a real Zotero export can break only the
+    # Typst path. Keep the first occurrence, matching citeproc.
+    text = (
+        "@string{up = {Univ Press}}\n\n"
+        "@incollection{chesterton2005,\n  title = {The {{Blue Cross}}},\n}\n\n"
+        "@book{smith2020, author={Smith, Jane}}\n\n"
+        "@incollection{chesterton2005,\n  title = {A later duplicate},\n}\n"
+    )
+    cleaned, dropped = _dedupe_bib(text)
+    assert dropped == 1
+    assert cleaned.count("chesterton2005") == 1
+    assert "Blue Cross" in cleaned          # the first entry survived
+    assert "later duplicate" not in cleaned  # the second did not
+    assert "smith2020" in cleaned
+    assert "@string" in cleaned              # non-entries pass through
+
+    # Nothing to do is not an error, and the text must come back intact.
+    same, dropped = _dedupe_bib("@book{a, title={A}}\n@book{b, title={B}}\n")
+    assert dropped == 0
+    assert "a," in same and "b," in same
+    assert _dedupe_bib("") == ("", 0)
+
+    # Distinct keys that differ only in case are NOT duplicates; dropping
+    # one would silently lose a real entry.
+    _, dropped = _dedupe_bib("@book{Ab, x={1}}\n@book{aB, x={2}}\n")
+    assert dropped == 0
+    print("  Bib dedupe OK")
 
 
 def test_bundled_bin():
@@ -1142,6 +1173,7 @@ if __name__ == "__main__":
     test_typst_template_exists()
     test_pdf_engine_routing()
     test_resolve_bib_path()
+    test_dedupe_bib()
     test_bundled_bin()
     print("  \u2713 Typst export tests passed\n")
 

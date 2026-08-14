@@ -1068,6 +1068,47 @@ def _pdf_engine(yaml: dict, setting: str = "typst") -> str:
     return "typst" if detect_typst() else "libreoffice"
 
 
+_BIB_ENTRY_RE = re.compile(r"@(\w+)\s*\{\s*([^,\s}]*)")
+
+
+def _dedupe_bib(text: str) -> tuple[str, int]:
+    """Drop repeated citekeys from BibTeX source.
+
+    Typst's BibLaTeX parser rejects a duplicate key outright and fails the
+    whole compile; pandoc's citeproc tolerates duplicates and simply
+    resolves the key once. Since a duplicated key can only ever cite one
+    of its entries either way, keeping the first occurrence matches the
+    docx path's effective behaviour rather than changing it.
+
+    Zotero exports grow these routinely -- a shared library where two
+    people added the same source is enough.
+
+    @string/@preamble/@comment are passed through untouched: they are not
+    entries and have no citekey to collide.
+
+    Returns (cleaned_text, entries_dropped).
+    """
+    matches = list(_BIB_ENTRY_RE.finditer(text))
+    if not matches:
+        return text, 0
+    out = [text[:matches[0].start()]]
+    seen: set[str] = set()
+    dropped = 0
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        chunk = text[m.start():end]
+        kind, key = m.group(1).lower(), m.group(2)
+        if kind in ("string", "preamble", "comment") or not key:
+            out.append(chunk)
+            continue
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        out.append(chunk)
+    return "".join(out), dropped
+
+
 def _resolve_bib_path(yaml: dict, vault_dir: Path) -> Optional[Path]:
     """Locate the .bib named by bibliography: in the frontmatter.
 
@@ -4448,14 +4489,27 @@ def create_app(storage):
                 def _assemble():
                     shutil.copy(template, Path(tmp_dir) / "journal.typ")
                     bib_name = None
+                    dropped = 0
                     if bib_src:
-                        shutil.copy(bib_src, Path(tmp_dir) / "refs.bib")
+                        cleaned, dropped = _dedupe_bib(
+                            bib_src.read_text(encoding="utf-8", errors="replace"))
+                        (Path(tmp_dir) / "refs.bib").write_text(
+                            cleaned, encoding="utf-8")
                         bib_name = "refs.bib"
                     (Path(tmp_dir) / "main.typ").write_text(
                         _typst_wrapper(yaml, "body.typ", bib_name),
                         encoding="utf-8")
+                    return dropped
 
-                await loop.run_in_executor(None, _assemble)
+                dropped = await loop.run_in_executor(None, _assemble)
+                if dropped:
+                    # Worth saying out loud: the .bib has a real problem
+                    # that the docx path silently absorbs.
+                    plural = "y" if dropped == 1 else "ies"
+                    show_notification(
+                        state,
+                        f"Note: skipped {dropped} duplicate .bib entr{plural}",
+                        duration=6)
 
                 typst_args = [typst, "compile", "--root", tmp_dir,
                               str(Path(tmp_dir) / "main.typ"), str(pdf_path)]
