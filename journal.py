@@ -1204,6 +1204,24 @@ def _strip_bib_noise(text: str) -> tuple[str, int]:
     return "".join(out), removed
 
 
+def _initial_pdf_engine(cfg: dict) -> str:
+    """Which PDF engine a device starts on, given its saved config.
+
+    An explicit choice always wins. Without one, the presence of a config
+    file is the tell: it means the device was set up before this setting
+    existed, so it has been exporting through LibreOffice all along --
+    possibly in someone else's hands, somewhere we cannot reach to
+    support. Leave those exactly as they are. Silently switching a
+    working device's export engine on update is how it stops working.
+
+    Only a genuinely fresh install starts on typst.
+    """
+    engine = cfg.get("pdf_engine")
+    if engine in PDF_ENGINES:
+        return engine
+    return "libreoffice" if _config_path().exists() else "typst"
+
+
 def _resolve_bib_path(yaml: dict, vault_dir: Path) -> Optional[Path]:
     """Locate the .bib named by bibliography: in the frontmatter.
 
@@ -3439,8 +3457,7 @@ def create_app(storage):
     except (TypeError, ValueError):
         state.autosave_secs = 30
     state.spell_lang = str(cfg.get("spell_lang", "") or "")
-    engine = cfg.get("pdf_engine", "typst")
-    state.pdf_engine = engine if engine in PDF_ENGINES else "typst"
+    state.pdf_engine = _initial_pdf_engine(cfg)
 
     # Load .bib cache on startup
     state.bib_entries, state.bib_path, state.bib_mtime, state.bib_error = (

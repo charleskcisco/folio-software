@@ -22,7 +22,7 @@ from journal import (
     _lua_coverpage_filter, _lua_header_filter,
     _postprocess_docx, _REFS_DIR,
     _author_lastname, _format_export_date, _typst_str, _typst_wrapper,
-    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _dedupe_bib, _strip_bib_noise,
+    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _dedupe_bib, _strip_bib_noise, _initial_pdf_engine,
     _list_continuation, _ensure_writable, MarkdownLexer,
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
     _env_bin, _config_path, _default_vault, _normalise_pasted,
@@ -486,6 +486,35 @@ def test_strip_bib_noise():
 
     assert _strip_bib_noise("") == ("", 0)
     print("  Bib noise stripping OK")
+
+
+def test_initial_pdf_engine():
+    # Devices already in the field must not have their export engine
+    # swapped by an update. Some of them belong to people we cannot
+    # reach, so a silent switch is a device that simply stops working.
+    import journal as J
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfgp = Path(tmpdir) / "config.json"
+        orig = J._config_path
+        J._config_path = lambda: cfgp
+        try:
+            # No config file at all -> genuinely fresh install.
+            assert not cfgp.exists()
+            assert _initial_pdf_engine({}) == "typst"
+
+            # Config exists but predates the setting -> leave it alone.
+            cfgp.write_text('{"vault": "/home/x/Documents"}')
+            assert _initial_pdf_engine({"vault": "/home/x/Documents"}) == "libreoffice"
+
+            # An explicit choice always wins, either way.
+            assert _initial_pdf_engine({"pdf_engine": "typst"}) == "typst"
+            assert _initial_pdf_engine({"pdf_engine": "libreoffice"}) == "libreoffice"
+
+            # A junk value is not an explicit choice.
+            assert _initial_pdf_engine({"pdf_engine": "nonsense"}) == "libreoffice"
+        finally:
+            J._config_path = orig
+    print("  Initial PDF engine OK")
 
 
 def test_bundled_bin():
@@ -1210,6 +1239,7 @@ if __name__ == "__main__":
     test_resolve_bib_path()
     test_dedupe_bib()
     test_strip_bib_noise()
+    test_initial_pdf_engine()
     test_bundled_bin()
     print("  \u2713 Typst export tests passed\n")
 
