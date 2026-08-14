@@ -4728,6 +4728,20 @@ def create_app(storage):
             ]
             if "bibliography" in yaml:
                 pandoc_args.append("--citeproc")
+                # Resolve bibliography: and csl: ourselves and pass them
+                # explicitly, because pandoc resolves the frontmatter's
+                # own values relative to the working directory -- not the
+                # vault, and not the note. A path that is right on one
+                # machine is wrong on the other, and a relative one is
+                # usually wrong on both, which is why exporting used to
+                # mean editing the frontmatter first. Command-line options
+                # outrank metadata, so this wins without touching the note.
+                bib_src = _resolve_bib_path(yaml, state.storage.vault_dir)
+                if bib_src:
+                    pandoc_args.append(f"--bibliography={bib_src}")
+                csl_src = _resolve_csl_path(yaml, state.storage.vault_dir)
+                if csl_src:
+                    pandoc_args.append(f"--csl={csl_src}")
             pandoc_args.extend(["-o", str(docx_path)])
 
             steps = "1/3" if export_format == "pdf" else "1/2"
