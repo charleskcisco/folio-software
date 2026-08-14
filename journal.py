@@ -1109,6 +1109,101 @@ def _dedupe_bib(text: str) -> tuple[str, int]:
     return "".join(out), dropped
 
 
+# Fields no bibliography style renders, and the usual source of junk in a
+# Zotero export: abstracts scraped as raw HTML, file paths full of colons
+# and backslashes, keyword dumps. Typst's BibLaTeX parser is far stricter
+# than citeproc and chokes on them -- one HTML abstract with LaTeX-escaped
+# math is enough to fail an entire 800-entry library with "unexpected end
+# of file". Dropping them costs nothing: Chicago and MLA render none.
+#
+# (An annotated-bibliography style would render annotation:. The export
+# hardcodes chicago-author-date, so nothing here is reachable output.)
+_BIB_NOISE_FIELDS = ("abstract", "file", "keywords", "annotation")
+_BIB_NOISE_RE = re.compile(
+    r"(?P<lead>[,{]\s*)(?:" + "|".join(_BIB_NOISE_FIELDS) + r")\s*=\s*",
+    re.IGNORECASE)
+
+
+def _bib_value_end(text: str, i: int) -> Optional[int]:
+    """Index just past the BibTeX field value starting at i, or None.
+
+    Handles brace-delimited, quote-delimited, and bare values, treating a
+    backslash as escaping the next character -- which is exactly what the
+    pathological abstracts need, since they are full of \\$ and \\{.
+    Returns None for an unterminated value so the caller can leave the
+    field alone rather than truncate the file.
+    """
+    n = len(text)
+    if i >= n:
+        return None
+    if text[i] == "{":
+        depth = 0
+        while i < n:
+            c = text[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+            i += 1
+        return None
+    if text[i] == '"':
+        i += 1
+        while i < n:
+            if text[i] == "\\":
+                i += 2
+                continue
+            if text[i] == '"':
+                return i + 1
+            i += 1
+        return None
+    while i < n and text[i] not in ",}":
+        i += 1
+    return i
+
+
+def _strip_bib_noise(text: str) -> tuple[str, int]:
+    """Remove non-rendering fields from BibTeX source.
+
+    Returns (cleaned_text, fields_removed). A field whose value cannot be
+    terminated is skipped rather than removed, so malformed input is
+    passed through unchanged instead of being corrupted further.
+    """
+    out: list[str] = []
+    pos = removed = 0
+    while True:
+        m = _BIB_NOISE_RE.search(text, pos)
+        if not m:
+            out.append(text[pos:])
+            break
+        end = _bib_value_end(text, m.end())
+        if end is None:
+            out.append(text[pos:m.end()])
+            pos = m.end()
+            continue
+        out.append(text[pos:m.start()])
+        # Take the *leading* separator with the field and leave the
+        # trailing one in place. Eating the trailing comma instead would
+        # strip the separator the next field needs to be recognised, so a
+        # run of noise fields -- abstract, file, keywords back to back, as
+        # Zotero writes them -- would only be stripped alternately.
+        if m.group("lead")[0] == "{":
+            # Field is first in the entry: keep the brace, and here the
+            # trailing separator is the redundant one.
+            out.append("{")
+            while end < len(text) and text[end] in " \t":
+                end += 1
+            if end < len(text) and text[end] == ",":
+                end += 1
+        pos = end
+        removed += 1
+    return "".join(out), removed
+
+
 def _resolve_bib_path(yaml: dict, vault_dir: Path) -> Optional[Path]:
     """Locate the .bib named by bibliography: in the frontmatter.
 
@@ -4504,6 +4599,9 @@ def create_app(storage):
                     if bib_src:
                         cleaned, dropped = _dedupe_bib(
                             bib_src.read_text(encoding="utf-8", errors="replace"))
+                        # Strip after deduping: less text to scan, and the
+                        # duplicate is gone before its fields are examined.
+                        cleaned, _ = _strip_bib_noise(cleaned)
                         (Path(tmp_dir) / "refs.bib").write_text(
                             cleaned, encoding="utf-8")
                         bib_name = "refs.bib"

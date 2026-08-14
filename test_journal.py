@@ -22,7 +22,7 @@ from journal import (
     _lua_coverpage_filter, _lua_header_filter,
     _postprocess_docx, _REFS_DIR,
     _author_lastname, _format_export_date, _typst_str, _typst_wrapper,
-    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _dedupe_bib,
+    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _dedupe_bib, _strip_bib_noise,
     _list_continuation, _ensure_writable, MarkdownLexer,
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
     _env_bin, _config_path, _default_vault, _normalise_pasted,
@@ -451,6 +451,41 @@ def test_dedupe_bib():
     _, dropped = _dedupe_bib("@book{Ab, x={1}}\n@book{aB, x={2}}\n")
     assert dropped == 0
     print("  Bib dedupe OK")
+
+
+def test_strip_bib_noise():
+    # A Zotero abstract carrying escaped HTML/math is enough to fail an
+    # entire library under Typst's BibLaTeX parser. No style renders it.
+    text = (
+        "@article{a,\n"
+        "  title = {Real Title},\n"
+        '  abstract = {\\${$<\\$$}p\\${$>\\$$}HTML junk\\${$<\\$$}/p\\${$>\\$$}},\n'
+        "  file = {C:\\\\path\\\\to\\\\file.pdf},\n"
+        "  keywords = {a,b,c},\n"
+        "  year = {2020}\n"
+        "}\n"
+    )
+    cleaned, removed = _strip_bib_noise(text)
+    assert removed == 3
+    for gone in ("abstract", "HTML junk", "file =", "keywords"):
+        assert gone not in cleaned, gone
+    # Everything that actually gets rendered survives.
+    assert "Real Title" in cleaned and "year = {2020}" in cleaned
+    assert cleaned.count("@article{a,") == 1
+    assert ",," not in cleaned.replace(" ", "")  # no doubled separators
+
+    # A field named like a noise field inside a *value* must not trigger.
+    keep = "@book{b, title = {On the abstract art of file keywords}}\n"
+    out, removed = _strip_bib_noise(keep)
+    assert removed == 0 and out == keep
+
+    # An unterminated value is left alone rather than truncating the file.
+    broken = "@book{c, abstract = {never closed\n"
+    out, removed = _strip_bib_noise(broken)
+    assert removed == 0 and "never closed" in out
+
+    assert _strip_bib_noise("") == ("", 0)
+    print("  Bib noise stripping OK")
 
 
 def test_bundled_bin():
@@ -1174,6 +1209,7 @@ if __name__ == "__main__":
     test_pdf_engine_routing()
     test_resolve_bib_path()
     test_dedupe_bib()
+    test_strip_bib_noise()
     test_bundled_bin()
     print("  \u2713 Typst export tests passed\n")
 
