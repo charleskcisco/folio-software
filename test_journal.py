@@ -26,7 +26,7 @@ from journal import (
     _list_continuation, _ensure_writable, MarkdownLexer,
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
     _env_bin, _config_path, _default_vault, _normalise_pasted,
-    _detect_clipboard, _no_console,
+    _detect_clipboard, _no_console, safe_entry_name, _ILLEGAL_CHARS,
 )
 
 
@@ -131,7 +131,7 @@ def test_find_bib_file():
 
         # With a .bib file
         bib = vault / "sources" / "refs.bib"
-        bib.write_text("@book{test, author={A}, title={B}}")
+        bib.write_text("@book{test, author={A}, title={B}}", encoding="utf-8")
         result = _find_bib_file(vault)
         assert result is not None
         assert result.name == "refs.bib"
@@ -144,7 +144,7 @@ def test_load_bib_entries():
         vault = Path(tmpdir)
         (vault / "sources").mkdir()
         bib = vault / "sources" / "library.bib"
-        bib.write_text('@book{doe2021, author={Doe, Jane}, title={A Book}}')
+        bib.write_text('@book{doe2021, author={Doe, Jane}, title={A Book}}', encoding="utf-8")
 
         entries, path, mtime, error = _load_bib_entries(vault)
         assert len(entries) == 1
@@ -406,7 +406,7 @@ def test_resolve_bib_path():
     with tempfile.TemporaryDirectory() as tmpdir:
         vault = Path(tmpdir)
         named = vault / "sources.bib"
-        named.write_text("@book{a, title={A}}\n")
+        named.write_text("@book{a, title={A}}\n", encoding="utf-8")
 
         # bibliography: resolves relative to the vault.
         assert _resolve_bib_path({"bibliography": "sources.bib"}, vault) == named
@@ -602,6 +602,117 @@ def test_powershell_paste_command():
     print("  PowerShell paste command OK")
 
 
+def test_safe_entry_name():
+    # The motivating case: a colon in an essay title is completely
+    # natural and is illegal in a Windows filename.
+    assert ":" not in safe_entry_name("Chapter 1: The Beginning")
+    assert safe_entry_name("Chapter 1: The Beginning") == "Chapter 1- The Beginning"
+
+    # Every illegal character must go, backslash included -- on Windows
+    # it is a separator, so leaving it would silently create a directory.
+    cleaned = safe_entry_name("a" + _ILLEGAL_CHARS + "b")
+    assert not any(c in cleaned for c in _ILLEGAL_CHARS), cleaned
+
+    # Forward slash is meaningful (rename into a subfolder) and must
+    # survive, while its components are still cleaned.
+    assert safe_entry_name("notes/Chapter: One") == "notes/Chapter- One"
+
+    # Reserved device names are refused by Windows whatever the
+    # extension, so NUL.md is not a file that can exist.
+    for reserved in ("CON", "nul", "COM1", "LPT9"):
+        out = safe_entry_name(reserved)
+        assert out.upper() not in ("CON", "NUL", "COM1", "LPT9"), out
+
+    # Trailing dots and spaces are silently dropped by Windows, so the
+    # file written is not the file looked for afterwards.
+    assert safe_entry_name("draft.") == "draft"
+    assert safe_entry_name("draft ") == "draft"
+
+    # A typed name must never escape the vault.
+    assert ".." not in safe_entry_name("../../etc/passwd")
+    assert safe_entry_name("../../etc/passwd") == "etc/passwd"
+
+    # Control characters are illegal on Windows and useless everywhere.
+    assert "\x01" not in safe_entry_name("a\x01b")
+
+    # Ordinary names must come through completely untouched.
+    for ok in ("Monday", "notes/2026-08-14", "A Room of One's Own"):
+        assert safe_entry_name(ok) == ok, ok
+    print("  Filename sanitisation OK")
+
+
+def test_create_entry_sanitises():
+    with tempfile.TemporaryDirectory() as td:
+        storage = VaultStorage(Path(td))
+        entry = storage.create_entry("Chapter 1: The Beginning")
+        # The file must actually exist under the cleaned name -- this is
+        # the assertion that would fail on Windows before the fix.
+        assert entry.path.exists()
+        assert ":" not in entry.path.name
+
+        # A name that sanitises away entirely still has to produce a file
+        # rather than creating ".md" or throwing.
+        blank = storage.create_entry("...")
+        assert blank.path.exists()
+        assert blank.path.stem
+    print("  create_entry sanitisation OK")
+
+
+def test_export_writes_utf8():
+    # The export path wrote source.md with no encoding=, which on Windows
+    # means cp1252 until Python 3.15. That fails two different ways, and
+    # the quieter one is the more damaging.
+
+    # 1. Silent corruption. cp1252 *can* hold curly quotes and em dashes
+    #    (0x91-0x97), so nothing raises -- but pandoc reads UTF-8, so it
+    #    sees different characters than the student typed.
+    smart = "He said “hello” — then left."
+    as_cp1252 = smart.encode("cp1252")
+    try:
+        round_tripped = as_cp1252.decode("utf-8")
+        assert round_tripped != smart, "expected mojibake, got clean text"
+    except UnicodeDecodeError:
+        pass  # also fine: pandoc would reject the file outright
+
+    # 2. Hard failure. Anything outside cp1252's 256 characters cannot be
+    #    written at all -- Greek in a classics essay, any CJK, an arrow.
+    for hostile in ("λόγος", "日本語", "a → b"):
+        try:
+            hostile.encode("cp1252")
+            raise AssertionError(f"expected cp1252 to reject {hostile!r}")
+        except UnicodeEncodeError:
+            pass
+
+    # With an explicit encoding both cases round-trip exactly.
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "source.md"
+        text = smart + " λόγος 日本語 a → b"
+        p.write_text(text, encoding="utf-8")
+        assert p.read_text(encoding="utf-8") == text
+    print("  UTF-8 export round-trip OK")
+
+
+def test_no_default_encoding_io():
+    # A regression guard for the whole class: any text I/O without an
+    # explicit encoding is locale-dependent, and the locale is only
+    # UTF-8 on the machines we happen to develop on.
+    src = (Path(__file__).parent / "journal.py").read_text(encoding="utf-8")
+    offenders = []
+    for i, line in enumerate(src.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        for call in ("read_text()", ".write_text("):
+            if call in stripped and "encoding=" not in stripped:
+                # write_text spanning lines is checked by the suite run
+                # under -X warn_default_encoding in CI.
+                if call == ".write_text(" and stripped.endswith("("):
+                    continue
+                offenders.append(f"{i}: {stripped[:70]}")
+    assert not offenders, "text I/O without encoding=:\n" + "\n".join(offenders)
+    print("  No default-encoding text I/O OK")
+
+
 def test_postprocess_docx():
     with tempfile.TemporaryDirectory() as tmpdir:
         docx_path = os.path.join(tmpdir, "test.docx")
@@ -706,15 +817,15 @@ def test_iter_md_paths():
     with tempfile.TemporaryDirectory() as tmpdir:
         v = Path(tmpdir)
         storage = VaultStorage(v)
-        (v / "a.md").write_text("x")
+        (v / "a.md").write_text("x", encoding="utf-8")
         (v / "sub").mkdir()
-        (v / "sub" / "b.md").write_text("x")
+        (v / "sub" / "b.md").write_text("x", encoding="utf-8")
         (v / ".stversions").mkdir()
-        (v / ".stversions" / "old.md").write_text("x")
+        (v / ".stversions" / "old.md").write_text("x", encoding="utf-8")
         (v / ".trash").mkdir()
-        (v / ".trash" / "t.md").write_text("x")
-        (v / ".hidden.md").write_text("x")
-        (v / "pdf" / "p.md").write_text("x")
+        (v / ".trash" / "t.md").write_text("x", encoding="utf-8")
+        (v / ".hidden.md").write_text("x", encoding="utf-8")
+        (v / "pdf" / "p.md").write_text("x", encoding="utf-8")
         names = sorted(p.relative_to(v).as_posix()
                        for p in storage.iter_md_paths())
         assert names == ["a.md", "sub/b.md"], names
@@ -725,15 +836,15 @@ def test_soft_delete():
     with tempfile.TemporaryDirectory() as tmpdir:
         storage = VaultStorage(Path(tmpdir))
         e = storage.create_entry("Note")
-        e.path.write_text("body")
+        e.path.write_text("body", encoding="utf-8")
         storage.delete_entry(e)
         assert not e.path.exists()
-        assert (Path(tmpdir) / ".trash" / "Note.md").read_text() == "body"
+        assert (Path(tmpdir) / ".trash" / "Note.md").read_text(encoding="utf-8") == "body"
         # Collision bumps instead of overwriting the trashed copy
         e2 = storage.create_entry("Note")
-        e2.path.write_text("body2")
+        e2.path.write_text("body2", encoding="utf-8")
         storage.delete_entry(e2)
-        assert (Path(tmpdir) / ".trash" / "Note 2.md").read_text() == "body2"
+        assert (Path(tmpdir) / ".trash" / "Note 2.md").read_text(encoding="utf-8") == "body2"
     print("  Soft delete to .trash OK")
 
 
@@ -918,25 +1029,25 @@ def test_trash_roundtrip():
     with tempfile.TemporaryDirectory() as tmpdir:
         storage = VaultStorage(Path(tmpdir))
         e = storage.create_entry("Note")
-        e.path.write_text("body")
+        e.path.write_text("body", encoding="utf-8")
         storage.delete_entry(e)
         trashed = storage.list_trash()
         assert [p.name for p in trashed] == ["Note.md"]
         # Restore returns it to the vault root
         dest = storage.restore_trashed(trashed[0])
-        assert dest == Path(tmpdir) / "Note.md" and dest.read_text() == "body"
+        assert dest == Path(tmpdir) / "Note.md" and dest.read_text(encoding="utf-8") == "body"
         assert storage.list_trash() == []
         # Restore collision bumps
         e2 = storage.create_entry("Note2")
-        e2.path.write_text("x")
+        e2.path.write_text("x", encoding="utf-8")
         storage.delete_entry(e2)
-        (Path(tmpdir) / "Note2.md").write_text("occupied")
+        (Path(tmpdir) / "Note2.md").write_text("occupied", encoding="utf-8")
         dest2 = storage.restore_trashed(storage.list_trash()[0])
         assert dest2.name == "Note2 2.md"
         # Empty trash
         for name in ("a", "b"):
             en = storage.create_entry(name)
-            en.path.write_text(name)
+            en.path.write_text(name, encoding="utf-8")
             storage.delete_entry(en)
         assert storage.empty_trash() == 2
         assert storage.list_trash() == []
@@ -947,19 +1058,19 @@ def test_foot_font_size():
     with tempfile.TemporaryDirectory() as tmpdir:
         ini = Path(tmpdir) / "foot.ini"
         # Existing size= gets replaced, other params preserved
-        ini.write_text("[main]\nfont=Noto Sans Mono:size=13:antialias=true\n")
+        ini.write_text("[main]\nfont=Noto Sans Mono:size=13:antialias=true\n", encoding="utf-8")
         assert _set_foot_font_size(16, ini) is True
-        assert "font=Noto Sans Mono:size=16:antialias=true" in ini.read_text()
+        assert "font=Noto Sans Mono:size=16:antialias=true" in ini.read_text(encoding="utf-8")
         assert _get_foot_font_size(ini) == 16
         # Font line without size= gets one appended
-        ini.write_text("[main]\nfont=Noto Sans Mono\n")
+        ini.write_text("[main]\nfont=Noto Sans Mono\n", encoding="utf-8")
         _set_foot_font_size(14, ini)
         assert _get_foot_font_size(ini) == 14
         # [main] without a font line
-        ini.write_text("[main]\npad=2x2\n")
+        ini.write_text("[main]\npad=2x2\n", encoding="utf-8")
         _set_foot_font_size(12, ini)
         assert _get_foot_font_size(ini) == 12
-        assert "pad=2x2" in ini.read_text()
+        assert "pad=2x2" in ini.read_text(encoding="utf-8")
         # Missing file gets created
         ini2 = Path(tmpdir) / "sub" / "foot.ini"
         assert _set_foot_font_size(15, ini2) is True
@@ -1043,6 +1154,10 @@ if __name__ == "__main__":
     test_normalise_pasted_windows()
     test_no_console_windows()
     test_powershell_paste_command()
+    test_safe_entry_name()
+    test_create_entry_sanitises()
+    test_export_writes_utf8()
+    test_no_default_encoding_io()
     print("  \u2713 Cross-platform shim tests passed\n")
 
     print("Testing list continuation...")

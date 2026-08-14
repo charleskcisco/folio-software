@@ -93,7 +93,8 @@ def _get_foot_font_size(ini_path=None):
     """Read the size= from foot.ini's font line, or None."""
     p = ini_path or _FOOT_INI
     try:
-        m = re.search(r"(?m)^font\s*=.*?size=(\d+)", p.read_text())
+        m = re.search(r"(?m)^font\s*=.*?size=(\d+)",
+                      p.read_text(encoding="utf-8"))
         return int(m.group(1)) if m else None
     except OSError:
         return None
@@ -106,7 +107,7 @@ def _set_foot_font_size(size, ini_path=None):
     p = ini_path or _FOOT_INI
     try:
         if p.exists():
-            text = p.read_text()
+            text = p.read_text(encoding="utf-8")
             if re.search(r"(?m)^font\s*=.*size=\d+", text):
                 text = re.sub(r"(?m)^(font\s*=[^\n]*?size=)\d+",
                               lambda m: m.group(1) + str(size), text)
@@ -122,10 +123,49 @@ def _set_foot_font_size(size, ini_path=None):
         else:
             p.parent.mkdir(parents=True, exist_ok=True)
             text = f"[main]\nfont=Noto Sans Mono:size={size}\n"
-        p.write_text(text)
+        p.write_text(text, encoding="utf-8")
         return True
     except OSError:
         return False
+
+
+# Characters Windows refuses in a filename, and the device names it
+# reserves regardless of extension. Enforced on every platform, not only
+# Windows: a vault is a synced folder, so a note titled "Chapter 1: The
+# Beginning" created on the deck becomes a file that cannot be written on
+# the student's laptop -- a sync error nobody is positioned to debug.
+_ILLEGAL_CHARS = '<>:"|?*\\'
+_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def _safe_component(part: str) -> str:
+    """Make one path component safe to use as a filename anywhere."""
+    out = "".join(
+        "-" if (ch in _ILLEGAL_CHARS or ord(ch) < 32) else ch for ch in part
+    )
+    # Windows silently strips trailing dots and spaces, so a name ending
+    # in one is written to a different path than the one we then look for.
+    out = out.rstrip(". ")
+    if out.split(".")[0].upper() in _RESERVED_NAMES:
+        out += "_"
+    return out
+
+
+def safe_entry_name(name: str) -> str:
+    """Sanitise a vault-relative note name, keeping its subdirectories.
+
+    '/' is meaningful here -- rename_entry treats it as "move to this
+    folder under the vault root" -- so components are cleaned
+    individually. '..' is dropped rather than cleaned, so a typed name
+    can never walk out of the vault.
+    """
+    parts = [_safe_component(p) for p in name.split("/")
+             if p not in ("", ".", "..")]
+    return "/".join(p for p in parts if p)
 
 
 class VaultStorage:
@@ -176,12 +216,14 @@ class VaultStorage:
         entry.path.write_text(content, encoding="utf-8")
 
     def create_entry(self, name: str) -> Entry:
+        name = safe_entry_name(name) or "untitled"
         path = self.vault_dir / f"{name}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
         return Entry(path=path, name=name, modified=path.stat().st_mtime)
 
     def rename_entry(self, entry: Entry, new_name: str) -> Entry:
+        new_name = safe_entry_name(new_name) or "untitled"
         if "/" not in new_name:
             # No slash — rename within same directory
             new_path = entry.path.parent / f"{new_name}.md"
@@ -1890,7 +1932,7 @@ def _detect_clipboard():
     for copy_cmd, paste_cmd in candidates:
         try:
             result = subprocess.run(
-                copy_cmd, input="", text=True, timeout=1,
+                copy_cmd, input="", text=True, timeout=1, encoding="utf-8",
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 **_no_console(),
             )
@@ -1935,10 +1977,12 @@ def _try_paste():
     if not _CLIP_PASTE_CMD:
         return None
     try:
-        enc = {"encoding": "utf-8"} if sys.platform == "win32" else {}
+        # pbpaste, wl-paste and the PowerShell command above all emit
+        # UTF-8; decoding as the locale codepage instead is how pasted
+        # curly quotes turn into junk on a machine that is not UTF-8.
         result = subprocess.run(
             _CLIP_PASTE_CMD, capture_output=True, text=True, timeout=2,
-            **enc, **_no_console())
+            encoding="utf-8", **_no_console())
         if result.returncode == 0:
             return _normalise_pasted(result.stdout)
     except (OSError, subprocess.SubprocessError):
@@ -4355,7 +4399,15 @@ def create_app(storage):
         pdf_path = export_dir / f"{safe_name}.pdf"
 
         try:
-            await loop.run_in_executor(None, lambda: md_path.write_text(content))
+            # Always name the encoding. Python's text default is the
+            # locale codepage until 3.15, which on Windows means cp1252,
+            # and pandoc reads UTF-8 no matter what we wrote. That fails
+            # twice over: curly quotes and em dashes encode fine as cp1252
+            # and so arrive at pandoc as different characters, silently;
+            # anything outside those 256 -- Greek, CJK, an arrow -- cannot
+            # be written at all and takes the whole export down.
+            await loop.run_in_executor(
+                None, lambda: md_path.write_text(content, encoding="utf-8"))
 
             if engine == "typst":
                 # pandoc is the markdown parser only: it emits Typst markup
@@ -4424,7 +4476,11 @@ def create_app(storage):
                 return
 
             lua_code = _generate_lua_filter(yaml)
-            await loop.run_in_executor(None, lambda: lua_path.write_text(lua_code))
+            # Same reason as source.md: the filter interpolates title and
+            # author straight from the note's frontmatter, so one accented
+            # name is enough to fail on a cp1252 default.
+            await loop.run_in_executor(
+                None, lambda: lua_path.write_text(lua_code, encoding="utf-8"))
 
             pandoc_args = [
                 pandoc, str(md_path), "--standalone",
