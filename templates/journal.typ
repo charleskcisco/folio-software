@@ -56,6 +56,7 @@
   spacing: "double",
   lastname: "",
   bib: none,
+  csl: none,
   doc,
 ) = {
   let leading = if spacing == "single" { leading-single } else { leading-double }
@@ -133,14 +134,22 @@
   // Hanging indent 720tw = 0.5in, matching the Lua filter, and the heading
   // starts on a new page as the filter's pageBreakBefore did.
   //
-  // chicago-author-date matches what citeproc uses by default.
+  // Citation style follows the note's csl: field, because pandoc's
+  // --citeproc reads that same field from the frontmatter — so this is
+  // what the docx path has been doing all along. It matters: a note
+  // pointing at Chicago full-note expects footnote citations, and
+  // falling back to author-date would silently rewrite every citation in
+  // the document as an inline parenthetical.
+  //
+  // Without csl:, use chicago-author-date — citeproc's own default, so
+  // the two engines still agree.
   if bib != none {
     pagebreak(weak: true)
     set par(hanging-indent: 0.5in)
     bibliography(
       bib,
       title: if style == "mla" { "Works Cited" } else { "Bibliography" },
-      style: "chicago-author-date",
+      style: if csl != none { csl } else { "chicago-author-date" },
     )
   }
 }

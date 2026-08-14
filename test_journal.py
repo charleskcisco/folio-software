@@ -22,7 +22,7 @@ from journal import (
     _lua_coverpage_filter, _lua_header_filter,
     _postprocess_docx, _REFS_DIR,
     _author_lastname, _format_export_date, _typst_str, _typst_wrapper,
-    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _dedupe_bib, _strip_bib_noise, _initial_pdf_engine, _strip_frontmatter,
+    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _dedupe_bib, _strip_bib_noise, _initial_pdf_engine, _strip_frontmatter, _resolve_csl_path,
     _list_continuation, _ensure_writable, MarkdownLexer,
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
     _env_bin, _config_path, _default_vault, _normalise_pasted,
@@ -348,6 +348,12 @@ def test_typst_wrapper():
     # No bibliography -> the literal none, not a quoted string.
     assert 'bib: none,' in _typst_wrapper(y, "body.typ", None)
 
+    # csl: drives citation format -- a note style renders footnotes, so
+    # falling back to the author-date default would rewrite every
+    # citation in the document as an inline parenthetical.
+    assert 'csl: "style.csl",' in _typst_wrapper(y, "body.typ", "refs.bib", "style.csl")
+    assert 'csl: none,' in _typst_wrapper(y, "body.typ", "refs.bib")
+
     # Absent frontmatter still produces every parameter, so the template
     # never sees a missing argument.
     bare = _typst_wrapper({}, "body.typ", None)
@@ -543,6 +549,28 @@ def test_strip_frontmatter():
     # Empty frontmatter still strips.
     assert _strip_frontmatter("---\n\n---\nBody\n") == "Body\n"
     print("  Frontmatter stripping OK")
+
+
+def test_resolve_csl_path():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        vault = Path(tmpdir)
+        (vault / "sources").mkdir()
+        csl = vault / "sources" / "chicago.csl"
+        csl.write_text("<style/>")
+
+        # Absolute path as written.
+        assert _resolve_csl_path({"csl": str(csl)}, vault) == csl
+        # Vault-relative.
+        assert _resolve_csl_path({"csl": "sources/chicago.csl"}, vault) == csl
+        # An absolute path from the *other* machine still resolves by name:
+        # frontmatter is written on whichever device the note was edited on.
+        assert _resolve_csl_path(
+            {"csl": "/home/charles/Documents/vault/sources/chicago.csl"},
+            vault) == csl
+        # Absent or unfindable.
+        assert _resolve_csl_path({}, vault) is None
+        assert _resolve_csl_path({"csl": "nope.csl"}, vault) is None
+    print("  CSL path resolution OK")
 
 
 def test_bundled_bin():
@@ -1265,6 +1293,7 @@ if __name__ == "__main__":
     test_typst_template_exists()
     test_pdf_engine_routing()
     test_resolve_bib_path()
+    test_resolve_csl_path()
     test_strip_frontmatter()
     test_dedupe_bib()
     test_strip_bib_noise()

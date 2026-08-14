@@ -1018,7 +1018,8 @@ def _typst_str(s: str) -> str:
 
 
 def _typst_wrapper(yaml: dict, body_name: str,
-                   bib_name: Optional[str] = None) -> str:
+                   bib_name: Optional[str] = None,
+                   csl_name: Optional[str] = None) -> str:
     """Source for the main .typ: configure the template, include the body.
 
     Pure string generation -- no filesystem, no subprocess -- so the
@@ -1036,11 +1037,13 @@ def _typst_wrapper(yaml: dict, body_name: str,
     ]
     args = "".join(f"  {k}: {_typst_str(v)},\n" for k, v in fields)
     bib_arg = _typst_str(bib_name) if bib_name else "none"
+    csl_arg = _typst_str(csl_name) if csl_name else "none"
     return (
         '#import "journal.typ": conf\n'
         "#show: conf.with(\n"
         f"{args}"
         f"  bib: {bib_arg},\n"
+        f"  csl: {csl_arg},\n"
         ")\n"
         f"#include {_typst_str(body_name)}\n"
     )
@@ -1222,6 +1225,27 @@ def _strip_frontmatter(content: str) -> str:
     """
     m = re.match(r"^---\n(.*?)\n---[ \t]*\n?", content, re.DOTALL)
     return content[m.end():] if m else content
+
+
+def _resolve_csl_path(yaml: dict, vault_dir: Path) -> Optional[Path]:
+    """Locate the .csl named by csl: in the frontmatter, or None.
+
+    Tries the literal value, then the same name relative to the vault and
+    to vault/sources -- frontmatter often carries an absolute path from
+    whichever machine wrote it, which will not exist on the other.
+    """
+    val = (yaml.get("csl") or "").strip()
+    if not val:
+        return None
+    name = Path(val).name
+    for cand in (Path(val).expanduser(), vault_dir / val,
+                 vault_dir / "sources" / name, vault_dir / name):
+        try:
+            if cand.is_file():
+                return cand
+        except OSError:
+            continue
+    return None
 
 
 def _initial_pdf_engine(cfg: dict) -> str:
@@ -4608,6 +4632,8 @@ def create_app(storage):
                 bib_src = (_resolve_bib_path(yaml, state.storage.vault_dir)
                            if "bibliography" in yaml else None)
 
+                csl_src = _resolve_csl_path(yaml, state.storage.vault_dir)
+
                 # Hand pandoc the body only. The template gets its metadata
                 # from Journal's own parse, so pandoc has no need of the
                 # frontmatter -- and feeding it the block only exposes the
@@ -4652,8 +4678,12 @@ def create_app(storage):
                         (Path(tmp_dir) / "refs.bib").write_text(
                             cleaned, encoding="utf-8")
                         bib_name = "refs.bib"
+                    csl_name = None
+                    if csl_src:
+                        shutil.copy(csl_src, Path(tmp_dir) / "style.csl")
+                        csl_name = "style.csl"
                     (Path(tmp_dir) / "main.typ").write_text(
-                        _typst_wrapper(yaml, "body.typ", bib_name),
+                        _typst_wrapper(yaml, "body.typ", bib_name, csl_name),
                         encoding="utf-8")
                     return dropped
 
