@@ -4405,11 +4405,17 @@ def create_app(storage):
 
         def _log_export_error(stage, cmd, result):
             # The on-screen notification is fleeting and truncated on a
-            # writerdeck. Write the full command, exit code, and output to
-            # a log in the vault (which the user browses) so failures are
-            # actually diagnosable. Returns the log filename, or None.
+            # writerdeck, so write the full command, exit code, and output
+            # somewhere durable.
+            #
+            # This lives under the config dir, not the vault: the vault is
+            # the user's own writing and syncs to every other device, and
+            # a crash log has no business in it. Same place filebrowser's
+            # log and db already go. Returns a display path, or None.
             try:
-                log = state.storage.vault_dir / "export-error.log"
+                log_dir = _config_path().parent / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log = log_dir / "export-error.log"
                 log.write_text(
                     f"Journal export failed\n"
                     f"stage:   {stage}\n"
@@ -4420,7 +4426,9 @@ def create_app(storage):
                     f"--- stdout ---\n{result.stdout or ''}\n"
                     f"--- stderr ---\n{result.stderr or ''}\n",
                     encoding="utf-8")
-                return log.name
+                # Full path, not just the filename: the log is no longer
+                # sitting in the vault where the user would stumble on it.
+                return _fmt_dest(log)
             except OSError:
                 return None
 
