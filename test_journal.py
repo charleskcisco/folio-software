@@ -17,10 +17,12 @@ from journal import (
     Entry, BibEntry, VaultStorage, fuzzy_filter, fuzzy_filter_entries,
     parse_bib_lightweight, _find_bib_file, _load_bib_entries,
     parse_yaml_frontmatter, resolve_reference_doc,
-    detect_pandoc, detect_libreoffice,
+    detect_pandoc, detect_libreoffice, detect_typst,
     _generate_lua_filter, _lua_basic_filter,
     _lua_coverpage_filter, _lua_header_filter,
     _postprocess_docx, _REFS_DIR,
+    _author_lastname, _format_export_date, _typst_str, _typst_wrapper,
+    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR,
     _list_continuation, _ensure_writable, MarkdownLexer,
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
 )
@@ -288,6 +290,141 @@ def test_lua_filter_generation():
     assert _generate_lua_filter({"style": "mla"}) == _lua_header_filter({})
     assert _generate_lua_filter({}) == _lua_basic_filter()
     print("  Dispatcher OK")
+
+
+def test_author_lastname():
+    # Explicit lastname wins over a derived one.
+    assert _author_lastname({"author": "Jane Doe", "lastname": "Smith"}) == "Smith"
+    assert _author_lastname({"author": "Jane Doe"}) == "Doe"
+    assert _author_lastname({"author": "Jane van der Berg"}) == "Berg"
+    assert _author_lastname({"author": "Prince"}) == "Prince"
+    assert _author_lastname({}) == ""
+    assert _author_lastname({"author": "   "}) == ""
+    print("  Lastname derivation OK")
+
+
+def test_format_export_date():
+    # Turabian and MLA render the same date differently; both drop the
+    # zero padding, matching the two Lua format_date functions.
+    turabian = {"date": "2026-01-05", "style": "chicago"}
+    mla = {"date": "2026-01-05", "style": "mla"}
+    assert _format_export_date(turabian) == "January 5, 2026"
+    assert _format_export_date(mla) == "5 January 2026"
+    # No style: behaves like Turabian, as the basic Lua filter does.
+    assert _format_export_date({"date": "2026-12-31"}) == "December 31, 2026"
+    # Anything unparseable passes through untouched.
+    assert _format_export_date({"date": "Spring 2026"}) == "Spring 2026"
+    assert _format_export_date({"date": "2026-13-01"}) == "2026-13-01"
+    assert _format_export_date({}) == ""
+    print("  Export date formatting OK")
+
+
+def test_typst_str():
+    assert _typst_str("plain") == '"plain"'
+    # Quotes and backslashes must not break out of the literal -- these
+    # come from user frontmatter, so they are the injection surface.
+    assert _typst_str('say "hi"') == '"say \\"hi\\""'
+    assert _typst_str("back\\slash") == '"back\\\\slash"'
+    print("  Typst string quoting OK")
+
+
+def test_typst_wrapper():
+    y = {"title": "T", "author": "Jane Doe", "course": "C",
+         "instructor": "I", "date": "2026-01-05", "style": "mla",
+         "spacing": "single"}
+    src = _typst_wrapper(y, "body.typ", "refs.bib")
+    assert '#import "journal.typ": conf' in src
+    assert '#show: conf.with(' in src
+    assert '#include "body.typ"' in src
+    assert 'title: "T",' in src
+    assert 'spacing: "single",' in src
+    # Derived fields, not raw frontmatter.
+    assert 'lastname: "Doe",' in src
+    assert 'date: "5 January 2026",' in src
+    assert 'bib: "refs.bib",' in src
+
+    # No bibliography -> the literal none, not a quoted string.
+    assert 'bib: none,' in _typst_wrapper(y, "body.typ", None)
+
+    # Absent frontmatter still produces every parameter, so the template
+    # never sees a missing argument.
+    bare = _typst_wrapper({}, "body.typ", None)
+    for key in ("title", "author", "course", "instructor", "date",
+                "style", "spacing", "lastname"):
+        assert f"{key}: " in bare, key
+    # spacing falls back to the default rather than an empty string.
+    assert 'spacing: "double",' in bare
+    print("  Typst wrapper OK")
+
+
+def test_typst_template_exists():
+    # The wrapper imports this by name; a rename would only surface at
+    # export time otherwise.
+    assert (_TEMPLATES_DIR / "journal.typ").is_file()
+    print("  Typst template present OK")
+
+
+def test_pdf_engine_routing():
+    saved = os.environ.pop("JOURNAL_PDF_ENGINE", None)
+    try:
+        have_typst = detect_typst() is not None
+
+        # The setting is honoured when nothing overrides it.
+        assert _pdf_engine({}, "libreoffice") == "libreoffice"
+        if have_typst:
+            assert _pdf_engine({}, "typst") == "typst"
+            assert _pdf_engine({"spacing": "single"}, "typst") == "typst"
+            assert _pdf_engine({"spacing": "double"}, "typst") == "typst"
+        else:
+            # Never route to an engine whose binary is missing.
+            assert _pdf_engine({}, "typst") == "libreoffice"
+
+        # A spacing the template cannot express names a reference .docx,
+        # so those notes must keep going through LibreOffice.
+        for spacing in ("quiz", "dg.double", "dg.single", "whatever"):
+            assert _pdf_engine({"spacing": spacing}, "typst") == "libreoffice"
+
+        # The env var outranks both the setting and the spacing rule.
+        os.environ["JOURNAL_PDF_ENGINE"] = "libreoffice"
+        assert _pdf_engine({"spacing": "single"}, "typst") == "libreoffice"
+        if have_typst:
+            os.environ["JOURNAL_PDF_ENGINE"] = "typst"
+            assert _pdf_engine({"spacing": "quiz"}, "libreoffice") == "typst"
+        # An unrecognised value is ignored rather than obeyed.
+        os.environ["JOURNAL_PDF_ENGINE"] = "nonsense"
+        assert _pdf_engine({}, "libreoffice") == "libreoffice"
+    finally:
+        os.environ.pop("JOURNAL_PDF_ENGINE", None)
+        if saved is not None:
+            os.environ["JOURNAL_PDF_ENGINE"] = saved
+    print("  PDF engine routing OK")
+
+
+def test_resolve_bib_path():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        vault = Path(tmpdir)
+        named = vault / "sources.bib"
+        named.write_text("@book{a, title={A}}\n")
+
+        # bibliography: resolves relative to the vault.
+        assert _resolve_bib_path({"bibliography": "sources.bib"}, vault) == named
+        # An absolute path is honoured as given.
+        assert _resolve_bib_path({"bibliography": str(named)}, vault) == named
+        # A name that does not exist falls back to the vault-wide search,
+        # which finds the one .bib present.
+        assert _resolve_bib_path({"bibliography": "missing.bib"}, vault) == named
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Nothing to find at all.
+        assert _resolve_bib_path({"bibliography": "x.bib"}, Path(tmpdir)) is None
+    print("  Bib path resolution OK")
+
+
+def test_bundled_bin():
+    # Nothing is bundled in a source checkout, so this must not invent a
+    # path -- otherwise detect_* would return a binary that cannot run.
+    assert _bundled_bin("definitely-not-a-real-tool") is None
+    print("  Bundled binary lookup OK")
 
 
 def test_postprocess_docx():
@@ -703,6 +840,17 @@ if __name__ == "__main__":
     print("Testing DOCX post-processing...")
     test_postprocess_docx()
     print("  \u2713 DOCX post-processing tests passed\n")
+
+    print("Testing Typst export path...")
+    test_author_lastname()
+    test_format_export_date()
+    test_typst_str()
+    test_typst_wrapper()
+    test_typst_template_exists()
+    test_pdf_engine_routing()
+    test_resolve_bib_path()
+    test_bundled_bin()
+    print("  \u2713 Typst export tests passed\n")
 
     print("Testing tool detection...")
     test_detect_tools()

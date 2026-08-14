@@ -20,6 +20,7 @@ sudo apt upgrade -y || echo "WARNING: some packages failed to upgrade — contin
 # System packages
 #   micro ranger        — fallback editor + file manager
 #   pandoc libreoffice  — export pipeline (.md -> .docx -> .pdf)
+#   xz-utils            — unpack the typst release tarball (below)
 #   cups cups-client    — printing (lp)
 #   git cage foot       — self-update + kiosk Wayland compositor + terminal
 #   xwayland            — cage requires it at startup or it won't launch
@@ -30,7 +31,7 @@ sudo apt upgrade -y || echo "WARNING: some packages failed to upgrade — contin
 #   python3 *           — runtime
 echo "Installing required packages..."
 sudo apt install -y \
-    curl \
+    curl xz-utils \
     micro ranger \
     pandoc libreoffice \
     cups cups-client \
@@ -54,6 +55,12 @@ if ! command -v filebrowser >/dev/null 2>&1; then
     echo "Installing File Browser..."
     curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
 fi
+
+# typst — PDF export engine. Not in apt on bookworm, so it comes from
+# GitHub releases. Non-fatal: without it Journal falls back to the
+# pandoc -> docx -> LibreOffice chain automatically.
+"${SCRIPT_DIR}/install-typst.sh" || \
+    echo "WARNING: typst install failed — PDF export will use LibreOffice."
 
 # Python venv + Journal dependencies (delegated to setup.sh, which the
 # self-update loop in run.sh also reuses).

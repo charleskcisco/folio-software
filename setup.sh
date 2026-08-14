@@ -18,4 +18,14 @@ fi
 echo "  Installing dependencies..."
 "${SCRIPT_DIR}/.venv/bin/pip" install --quiet prompt_toolkit pygments
 
+# typst is a system binary, not a Python package, so it is app-setup.sh's
+# job -- but run.sh's self-update loop only calls this script. Flag it here
+# so a device that updated into the Typst PDF engine learns why it is still
+# exporting via LibreOffice. Non-fatal: the fallback is automatic.
+if ! command -v typst >/dev/null 2>&1; then
+    echo ""
+    echo "  Note: typst not found — PDF export will use LibreOffice."
+    echo "        Run ./install-typst.sh to enable the faster engine."
+fi
+
 echo "Done. Run with: ./run.sh"

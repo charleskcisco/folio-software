@@ -253,8 +253,20 @@ class VaultStorage:
 
 _APP_DIR = Path(__file__).resolve().parent
 _REFS_DIR = _APP_DIR / "refs"
+_TEMPLATES_DIR = _APP_DIR / "templates"
 _SCREENSHOTS_DIR = _APP_DIR / "screenshots"
 _DEFAULT_SPACING = "double"
+
+# Spacings the Typst template implements. Anything else names a reference
+# .docx in refs/ (dg.double, quiz, ...) that only the LibreOffice chain can
+# honour, so those documents fall back to it -- see _pdf_engine.
+_TYPST_SPACINGS = ("single", "double")
+
+# PDF engines, in Options cycling order. Evaluation scaffolding: typst is
+# being compared against the original docx->LibreOffice chain, and this
+# setting exists so the comparison can be made on the writerdeck itself.
+# Remove the option once the decision is made.
+PDF_ENGINES = ("typst", "libreoffice")
 _UPDATE_RECHECK_SECS = 24 * 3600.0  # re-check for updates daily while running
 
 # File Browser (filebrowser/filebrowser) — optional web share of the vault.
@@ -315,9 +327,30 @@ def resolve_reference_doc(yaml: dict) -> Optional[Path]:
     return None
 
 
+def _bundled_bin(name: str) -> Optional[str]:
+    """Path to a helper binary shipped with the app, or None.
+
+    Bundled tools win over PATH so a packaged build is self-contained and
+    does not depend on what the host machine happens to have installed.
+    A PyInstaller build unpacks to sys._MEIPASS; a source checkout just
+    uses the app dir, so dropping a binary in ./bin works either way.
+    """
+    roots = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(Path(meipass))
+    roots.append(_APP_DIR)
+    exe = name + (".exe" if sys.platform == "win32" else "")
+    for root in roots:
+        p = root / "bin" / exe
+        if p.is_file():
+            return str(p)
+    return None
+
+
 def detect_pandoc() -> Optional[str]:
     """Find the pandoc binary."""
-    found = shutil.which("pandoc")
+    found = _bundled_bin("pandoc") or shutil.which("pandoc")
     if found:
         return found
     for p in [
@@ -325,6 +358,22 @@ def detect_pandoc() -> Optional[str]:
         "/opt/homebrew/bin/pandoc",
         "/usr/bin/pandoc",
         "/snap/bin/pandoc",
+    ]:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def detect_typst() -> Optional[str]:
+    """Find the typst binary (PDF export engine)."""
+    found = _bundled_bin("typst") or shutil.which("typst")
+    if found:
+        return found
+    for p in [
+        "/usr/local/bin/typst",
+        "/opt/homebrew/bin/typst",
+        "/usr/bin/typst",
+        "/snap/bin/typst",
     ]:
         if os.path.isfile(p):
             return p
@@ -828,17 +877,27 @@ _EMPTY_FOOTER_XML = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </w:ftr>"""
 
 
+def _author_lastname(yaml: dict) -> str:
+    """Surname for the MLA running head.
+
+    Explicit lastname: wins; otherwise take the last whitespace-separated
+    token of author:. Shared by both export engines so the docx running
+    head and the Typst one can never disagree about the name.
+    """
+    lastname = yaml.get("lastname", "")
+    if lastname:
+        return lastname
+    parts = yaml.get("author", "").split()
+    return parts[-1] if parts else ""
+
+
 def _postprocess_docx(docx_path: str, yaml: dict) -> None:
     """Strip headers/footers and replace {{LASTNAME}} in DOCX zip."""
     fmt = yaml.get("style", "")
     strip_headers = fmt != "mla"  # strip for chicago or blank
     strip_footers = fmt == "mla"  # strip only for mla format
 
-    # Determine lastname replacement
-    author = yaml.get("author", "")
-    lastname = yaml.get("lastname", "")
-    if not lastname and author:
-        lastname = author.split()[-1] if author.split() else ""
+    lastname = _author_lastname(yaml)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(docx_path, "r") as zin:
@@ -866,6 +925,109 @@ def _postprocess_docx(docx_path: str, yaml: dict) -> None:
 
     with open(docx_path, "wb") as f:
         f.write(buf.getvalue())
+
+
+# ── Typst export helpers ──────────────────────────────────────────────
+
+_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+
+
+def _format_export_date(yaml: dict) -> str:
+    """Render date: for the cover page / MLA header.
+
+    Mirrors the two Lua format_date functions: Turabian writes
+    "January 1, 2026", MLA writes "1 January 2026". Anything that is not
+    YYYY-MM-DD passes through untouched, exactly as it does today.
+    """
+    raw = yaml.get("date", "")
+    m = re.search(r"(\d+)-(\d+)-(\d+)", raw)
+    if not m:
+        return raw
+    year, month, day = m.group(1), int(m.group(2)), int(m.group(3))
+    if not 1 <= month <= 12:
+        return raw
+    name = _MONTH_NAMES[month - 1]
+    if yaml.get("style", "") == "mla":
+        return f"{day} {name} {year}"
+    return f"{name} {day}, {year}"
+
+
+def _typst_str(s: str) -> str:
+    """Quote a Python string as a Typst string literal."""
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _typst_wrapper(yaml: dict, body_name: str,
+                   bib_name: Optional[str] = None) -> str:
+    """Source for the main .typ: configure the template, include the body.
+
+    Pure string generation -- no filesystem, no subprocess -- so the
+    template wiring stays testable without typst installed.
+    """
+    fields = [
+        ("title", yaml.get("title", "")),
+        ("author", yaml.get("author", "")),
+        ("course", yaml.get("course", "")),
+        ("instructor", yaml.get("instructor", "")),
+        ("date", _format_export_date(yaml)),
+        ("style", yaml.get("style", "")),
+        ("spacing", yaml.get("spacing", "") or _DEFAULT_SPACING),
+        ("lastname", _author_lastname(yaml)),
+    ]
+    args = "".join(f"  {k}: {_typst_str(v)},\n" for k, v in fields)
+    bib_arg = _typst_str(bib_name) if bib_name else "none"
+    return (
+        '#import "journal.typ": conf\n'
+        "#show: conf.with(\n"
+        f"{args}"
+        f"  bib: {bib_arg},\n"
+        ")\n"
+        f"#include {_typst_str(body_name)}\n"
+    )
+
+
+def _pdf_engine(yaml: dict, setting: str = "typst") -> str:
+    """Which engine renders PDF for this note: "typst" or "libreoffice".
+
+    Precedence, highest first:
+      1. JOURNAL_PDF_ENGINE, for scripted A/B comparison runs
+      2. a spacing: the Typst template cannot express -- those name a
+         reference .docx (dg.double, quiz, ...), so only the LibreOffice
+         chain can honour them and the note must keep its current output
+      3. the Options setting
+      4. typst by default, but never when its binary is missing
+    """
+    env = os.environ.get("JOURNAL_PDF_ENGINE", "").strip()
+    if env in ("typst", "libreoffice"):
+        return env
+    spacing = yaml.get("spacing", "")
+    if spacing and spacing not in _TYPST_SPACINGS:
+        return "libreoffice"
+    if setting == "libreoffice":
+        return "libreoffice"
+    return "typst" if detect_typst() else "libreoffice"
+
+
+def _resolve_bib_path(yaml: dict, vault_dir: Path) -> Optional[Path]:
+    """Locate the .bib named by bibliography: in the frontmatter.
+
+    Tries the literal value (absolute, then relative to the vault) before
+    falling back to the same vault-wide search the citation picker uses,
+    so a bare `bibliography: true` still finds the vault's .bib.
+    """
+    val = (yaml.get("bibliography") or "").strip()
+    if val:
+        for cand in (Path(val).expanduser(), vault_dir / val):
+            try:
+                if cand.is_file():
+                    return cand
+            except OSError:
+                continue
+    found = _find_bib_file(vault_dir)
+    return found if found and found.is_file() else None
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1400,6 +1562,7 @@ class AppState:
         self.show_preview = True   # wide-layout preview pane
         self.autosave_secs = 30    # 0 = timer off (manual saves unaffected)
         self.spell_lang = ""       # "" = aspell default dictionary
+        self.pdf_engine = "typst"  # PDF export engine; see PDF_ENGINES
         # File Browser web share
         self.filebrowser_proc = None
         self.share_url = ""
@@ -3025,6 +3188,8 @@ def create_app(storage):
     except (TypeError, ValueError):
         state.autosave_secs = 30
     state.spell_lang = str(cfg.get("spell_lang", "") or "")
+    engine = cfg.get("pdf_engine", "typst")
+    state.pdf_engine = engine if engine in PDF_ENGINES else "typst"
 
     # Load .bib cache on startup
     state.bib_entries, state.bib_path, state.bib_mtime, state.bib_error = (
@@ -4042,20 +4207,37 @@ def create_app(storage):
             show_notification(state, "Pandoc not found. Install pandoc for export.")
             return
 
-        if export_format == "pdf":
-            export_dir = state.storage.pdf_dir
-            libreoffice = detect_libreoffice()
-            if not libreoffice:
-                show_notification(state, "LibreOffice not found for PDF export.")
+        # PDF has two engines; docx only ever goes through pandoc. Both
+        # land at the same export_dir, so only the middle of the pipeline
+        # differs.
+        engine = (_pdf_engine(yaml, state.pdf_engine)
+                  if export_format == "pdf" else "libreoffice")
+        export_dir = (state.storage.pdf_dir if export_format == "pdf"
+                      else state.storage.docx_dir)
+
+        typst = libreoffice = ref_doc = template = None
+        if engine == "typst":
+            typst = detect_typst()
+            if not typst:
+                show_notification(state, "typst not found for PDF export.")
+                return
+            template = _TEMPLATES_DIR / "journal.typ"
+            if not template.is_file():
+                show_notification(
+                    state, f"Missing export template: {template.name}")
                 return
         else:
-            export_dir = state.storage.docx_dir
-            libreoffice = None
-
-        ref_doc = resolve_reference_doc(yaml)
-        if not ref_doc:
-            show_notification(state, "No reference .docx found in refs/ directory.")
-            return
+            # pandoc's docx writer needs the reference doc for styling,
+            # whether the docx is the deliverable or just LibreOffice's input.
+            ref_doc = resolve_reference_doc(yaml)
+            if not ref_doc:
+                show_notification(state, "No reference .docx found in refs/ directory.")
+                return
+            if export_format == "pdf":
+                libreoffice = detect_libreoffice()
+                if not libreoffice:
+                    show_notification(state, "LibreOffice not found for PDF export.")
+                    return
 
         def _fmt_dest(p):
             # Show where the export landed so it's findable. Prefer a
@@ -4103,6 +4285,73 @@ def create_app(storage):
 
         try:
             await loop.run_in_executor(None, lambda: md_path.write_text(content))
+
+            if engine == "typst":
+                # pandoc is the markdown parser only: it emits Typst markup
+                # for the body, and the template does all the formatting.
+                # No --citeproc -- without it pandoc emits native @citekey
+                # references, which Typst's own bibliography engine renders.
+                # Resolve the bibliography first: it decides how pandoc is
+                # invoked. With a .bib, pandoc emits native Typst citations
+                # for Typst's own bibliography engine to resolve. Without
+                # one, pandoc's citations extension must be turned off so
+                # @keys stay literal text -- otherwise Typst aborts the
+                # whole compile on an unresolvable label, where the docx
+                # chain simply prints the @key.
+                bib_src = (_resolve_bib_path(yaml, state.storage.vault_dir)
+                           if "bibliography" in yaml else None)
+
+                body_path = Path(tmp_dir) / "body.typ"
+                pandoc_args = [pandoc, str(md_path)]
+                if not bib_src:
+                    pandoc_args += ["--from", "markdown-citations"]
+                pandoc_args += ["--to", "typst", "-o", str(body_path)]
+                show_notification(
+                    state, "Exporting… (1/2) Running pandoc", duration=60)
+                result = await loop.run_in_executor(
+                    None, lambda: subprocess.run(
+                        pandoc_args, capture_output=True, text=True, timeout=60))
+                if result.returncode != 0 or not body_path.exists():
+                    err = (result.stderr or result.stdout or "").strip()
+                    tail = err.splitlines()[-1][:70] if err else "no output file produced"
+                    log = _log_export_error("pandoc", pandoc_args, result)
+                    suffix = f" (see {log})" if log else ""
+                    show_notification(state, f"Export failed (pandoc): {tail}{suffix}")
+                    return
+
+                # Assemble a self-contained Typst project in the temp dir so
+                # typst's default root confinement is satisfied without
+                # granting it access to the vault.
+                def _assemble():
+                    shutil.copy(template, Path(tmp_dir) / "journal.typ")
+                    bib_name = None
+                    if bib_src:
+                        shutil.copy(bib_src, Path(tmp_dir) / "refs.bib")
+                        bib_name = "refs.bib"
+                    (Path(tmp_dir) / "main.typ").write_text(
+                        _typst_wrapper(yaml, "body.typ", bib_name),
+                        encoding="utf-8")
+
+                await loop.run_in_executor(None, _assemble)
+
+                typst_args = [typst, "compile", "--root", tmp_dir,
+                              str(Path(tmp_dir) / "main.typ"), str(pdf_path)]
+                show_notification(
+                    state, "Exporting… (2/2) Rendering PDF", duration=60)
+                result = await loop.run_in_executor(
+                    None, lambda: subprocess.run(
+                        typst_args, capture_output=True, text=True, timeout=120))
+                if result.returncode != 0 or not pdf_path.exists():
+                    err = (result.stderr or result.stdout or "").strip()
+                    tail = (err.splitlines()[-1][:70] if err
+                            else "typst ran but produced no PDF")
+                    log = _log_export_error("typst", typst_args, result)
+                    suffix = f" (see {log})" if log else ""
+                    show_notification(state, f"Export failed (typst): {tail}{suffix}")
+                    return
+                show_notification(state, f"Exported: {_fmt_dest(pdf_path)}")
+                return
+
             lua_code = _generate_lua_filter(yaml)
             await loop.run_in_executor(None, lambda: lua_path.write_text(lua_code))
 
@@ -4704,6 +4953,8 @@ def create_app(storage):
              + (f"{state.autosave_secs}s" if state.autosave_secs else "off")),
             ("spell",
              f"Aspell language: {state.spell_lang or 'default'}"),
+            (None, "Export"),
+            ("pdfengine", f"PDF engine: {state.pdf_engine}"),
             (None, "Device"),
             ("wifi", "Wi-Fi…"),
             ("trash",
@@ -4767,6 +5018,25 @@ def create_app(storage):
                     state.spell_lang = langs[(cur + 1) % len(langs)]
                     cfg = _load_config()
                     cfg["spell_lang"] = state.spell_lang
+                    _save_config(cfg)
+                elif choice == "pdfengine":
+                    # Guard like "spell" does: never select an engine whose
+                    # binary is missing, or the next export just fails.
+                    order = list(PDF_ENGINES)
+                    nxt = order[(order.index(state.pdf_engine) + 1) % len(order)]
+                    if nxt == "typst" and not detect_typst():
+                        show_notification(
+                            state, "typst not found — install it to compare"
+                            " PDF engines.")
+                        continue
+                    if nxt == "libreoffice" and not detect_libreoffice():
+                        show_notification(
+                            state, "LibreOffice not found — install it to"
+                            " compare PDF engines.")
+                        continue
+                    state.pdf_engine = nxt
+                    cfg = _load_config()
+                    cfg["pdf_engine"] = state.pdf_engine
                     _save_config(cfg)
                 elif choice == "scheme":
                     order = list(COLOR_SCHEMES)
