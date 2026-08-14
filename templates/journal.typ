@@ -55,8 +55,6 @@
   style: "",
   spacing: "double",
   lastname: "",
-  bib: none,
-  csl: none,
   doc,
 ) = {
   let leading = if spacing == "single" { leading-single } else { leading-double }
@@ -95,6 +93,27 @@
   show heading.where(level: 2): set block(above: 8pt, below: 4pt)
   show heading.where(level: 3): set block(above: 8pt, below: 4pt)
 
+  // ── Bibliography ───────────────────────────────────────────────────────
+  //
+  // Citations and the reference list are rendered by pandoc's citeproc,
+  // not by Typst, and arrive already formatted. pandoc emits the list as a
+  // block labelled <refs>; this styles it to match what the Lua filter did
+  // to the docx — page break before it, a heading, 0.5in hanging indent.
+  //
+  // Typst's own bibliography() cannot do this job under a note style: it
+  // renders each citation as a *new* footnote, and notes in this vault put
+  // citations inside footnotes already (^[Again, @key]). Footnotes do not
+  // nest, so the citation silently vanished and left an empty note behind.
+  // citeproc knows it is already inside a note and inlines the text.
+  //
+  // Declared before doc, since a show rule only affects what follows it.
+  show <refs>: it => {
+    pagebreak(weak: true)
+    heading(level: 1, if style == "mla" { "Works Cited" } else { "Bibliography" })
+    set par(hanging-indent: 0.5in)
+    it
+  }
+
   // ── Front matter ───────────────────────────────────────────────────────
   if style == "chicago" {
     // Turabian cover page. w:before=2400tw = 1.667in above the title;
@@ -123,33 +142,4 @@
   }
 
   doc
-
-  // ── Bibliography ───────────────────────────────────────────────────────
-  //
-  // Replaces both --citeproc and the Lua OpenXML run-builder. Hayagriva
-  // reads the .bib directly and formats entries itself, so italics inside
-  // entries survive natively — that was the bug the Lua inlines_to_openxml
-  // walker existed to work around.
-  //
-  // Hanging indent 720tw = 0.5in, matching the Lua filter, and the heading
-  // starts on a new page as the filter's pageBreakBefore did.
-  //
-  // Citation style follows the note's csl: field, because pandoc's
-  // --citeproc reads that same field from the frontmatter — so this is
-  // what the docx path has been doing all along. It matters: a note
-  // pointing at Chicago full-note expects footnote citations, and
-  // falling back to author-date would silently rewrite every citation in
-  // the document as an inline parenthetical.
-  //
-  // Without csl:, use chicago-author-date — citeproc's own default, so
-  // the two engines still agree.
-  if bib != none {
-    pagebreak(weak: true)
-    set par(hanging-indent: 0.5in)
-    bibliography(
-      bib,
-      title: if style == "mla" { "Works Cited" } else { "Bibliography" },
-      style: if csl != none { csl } else { "chicago-author-date" },
-    )
-  }
 }

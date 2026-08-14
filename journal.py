@@ -1038,9 +1038,7 @@ def _typst_str(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _typst_wrapper(yaml: dict, body_name: str,
-                   bib_name: Optional[str] = None,
-                   csl_name: Optional[str] = None) -> str:
+def _typst_wrapper(yaml: dict, body_name: str) -> str:
     """Source for the main .typ: configure the template, include the body.
 
     Pure string generation -- no filesystem, no subprocess -- so the
@@ -1057,14 +1055,10 @@ def _typst_wrapper(yaml: dict, body_name: str,
         ("lastname", _author_lastname(yaml)),
     ]
     args = "".join(f"  {k}: {_typst_str(v)},\n" for k, v in fields)
-    bib_arg = _typst_str(bib_name) if bib_name else "none"
-    csl_arg = _typst_str(csl_name) if csl_name else "none"
     return (
         '#import "journal.typ": conf\n'
         "#show: conf.with(\n"
         f"{args}"
-        f"  bib: {bib_arg},\n"
-        f"  csl: {csl_arg},\n"
         ")\n"
         f"#include {_typst_str(body_name)}\n"
     )
@@ -1090,142 +1084,6 @@ def _pdf_engine(yaml: dict, setting: str = "typst") -> str:
     if setting == "libreoffice":
         return "libreoffice"
     return "typst" if detect_typst() else "libreoffice"
-
-
-_BIB_ENTRY_RE = re.compile(r"@(\w+)\s*\{\s*([^,\s}]*)")
-
-
-def _dedupe_bib(text: str) -> tuple[str, int]:
-    """Drop repeated citekeys from BibTeX source.
-
-    Typst's BibLaTeX parser rejects a duplicate key outright and fails the
-    whole compile; pandoc's citeproc tolerates duplicates and simply
-    resolves the key once. Since a duplicated key can only ever cite one
-    of its entries either way, keeping the first occurrence matches the
-    docx path's effective behaviour rather than changing it.
-
-    Zotero exports grow these routinely -- a shared library where two
-    people added the same source is enough.
-
-    @string/@preamble/@comment are passed through untouched: they are not
-    entries and have no citekey to collide.
-
-    Returns (cleaned_text, entries_dropped).
-    """
-    matches = list(_BIB_ENTRY_RE.finditer(text))
-    if not matches:
-        return text, 0
-    out = [text[:matches[0].start()]]
-    seen: set[str] = set()
-    dropped = 0
-    for i, m in enumerate(matches):
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        chunk = text[m.start():end]
-        kind, key = m.group(1).lower(), m.group(2)
-        if kind in ("string", "preamble", "comment") or not key:
-            out.append(chunk)
-            continue
-        if key in seen:
-            dropped += 1
-            continue
-        seen.add(key)
-        out.append(chunk)
-    return "".join(out), dropped
-
-
-# Fields no bibliography style renders, and the usual source of junk in a
-# Zotero export: abstracts scraped as raw HTML, file paths full of colons
-# and backslashes, keyword dumps. Typst's BibLaTeX parser is far stricter
-# than citeproc and chokes on them -- one HTML abstract with LaTeX-escaped
-# math is enough to fail an entire 800-entry library with "unexpected end
-# of file". Dropping them costs nothing: Chicago and MLA render none.
-#
-# (An annotated-bibliography style would render annotation:. The export
-# hardcodes chicago-author-date, so nothing here is reachable output.)
-_BIB_NOISE_FIELDS = ("abstract", "file", "keywords", "annotation")
-_BIB_NOISE_RE = re.compile(
-    r"(?P<lead>[,{]\s*)(?:" + "|".join(_BIB_NOISE_FIELDS) + r")\s*=\s*",
-    re.IGNORECASE)
-
-
-def _bib_value_end(text: str, i: int) -> Optional[int]:
-    """Index just past the BibTeX field value starting at i, or None.
-
-    Handles brace-delimited, quote-delimited, and bare values, treating a
-    backslash as escaping the next character -- which is exactly what the
-    pathological abstracts need, since they are full of \\$ and \\{.
-    Returns None for an unterminated value so the caller can leave the
-    field alone rather than truncate the file.
-    """
-    n = len(text)
-    if i >= n:
-        return None
-    if text[i] == "{":
-        depth = 0
-        while i < n:
-            c = text[i]
-            if c == "\\":
-                i += 2
-                continue
-            if c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    return i + 1
-            i += 1
-        return None
-    if text[i] == '"':
-        i += 1
-        while i < n:
-            if text[i] == "\\":
-                i += 2
-                continue
-            if text[i] == '"':
-                return i + 1
-            i += 1
-        return None
-    while i < n and text[i] not in ",}":
-        i += 1
-    return i
-
-
-def _strip_bib_noise(text: str) -> tuple[str, int]:
-    """Remove non-rendering fields from BibTeX source.
-
-    Returns (cleaned_text, fields_removed). A field whose value cannot be
-    terminated is skipped rather than removed, so malformed input is
-    passed through unchanged instead of being corrupted further.
-    """
-    out: list[str] = []
-    pos = removed = 0
-    while True:
-        m = _BIB_NOISE_RE.search(text, pos)
-        if not m:
-            out.append(text[pos:])
-            break
-        end = _bib_value_end(text, m.end())
-        if end is None:
-            out.append(text[pos:m.end()])
-            pos = m.end()
-            continue
-        out.append(text[pos:m.start()])
-        # Take the *leading* separator with the field and leave the
-        # trailing one in place. Eating the trailing comma instead would
-        # strip the separator the next field needs to be recognised, so a
-        # run of noise fields -- abstract, file, keywords back to back, as
-        # Zotero writes them -- would only be stripped alternately.
-        if m.group("lead")[0] == "{":
-            # Field is first in the entry: keep the brace, and here the
-            # trailing separator is the redundant one.
-            out.append("{")
-            while end < len(text) and text[end] in " \t":
-                end += 1
-            if end < len(text) and text[end] == ",":
-                end += 1
-        pos = end
-        removed += 1
-    return "".join(out), removed
 
 
 def _strip_frontmatter(content: str) -> str:
@@ -4658,7 +4516,18 @@ def create_app(storage):
 
                 body_path = Path(tmp_dir) / "body.typ"
                 pandoc_args = [pandoc, str(body_md)]
-                if not bib_src:
+                if bib_src:
+                    # citeproc renders the citations and the reference
+                    # list, exactly as it does for docx. Typst's own
+                    # bibliography() cannot do this job: under a note
+                    # style it turns each citation into a new footnote,
+                    # and notes here put citations inside footnotes
+                    # already (^[Again, @key]). Footnotes do not nest, so
+                    # the citation vanished and left an empty note.
+                    pandoc_args += ["--citeproc", f"--bibliography={bib_src}"]
+                    if csl_src:
+                        pandoc_args.append(f"--csl={csl_src}")
+                else:
                     pandoc_args += ["--from", "markdown-citations"]
                 pandoc_args += ["--to", "typst", "-o", str(body_path)]
                 show_notification(
@@ -4679,36 +4548,10 @@ def create_app(storage):
                 # granting it access to the vault.
                 def _assemble():
                     shutil.copy(template, Path(tmp_dir) / "journal.typ")
-                    bib_name = None
-                    dropped = 0
-                    if bib_src:
-                        cleaned, dropped = _dedupe_bib(
-                            bib_src.read_text(encoding="utf-8", errors="replace"))
-                        # Strip after deduping: less text to scan, and the
-                        # duplicate is gone before its fields are examined.
-                        cleaned, _ = _strip_bib_noise(cleaned)
-                        (Path(tmp_dir) / "refs.bib").write_text(
-                            cleaned, encoding="utf-8")
-                        bib_name = "refs.bib"
-                    csl_name = None
-                    if csl_src:
-                        shutil.copy(csl_src, Path(tmp_dir) / "style.csl")
-                        csl_name = "style.csl"
                     (Path(tmp_dir) / "main.typ").write_text(
-                        _typst_wrapper(yaml, "body.typ", bib_name, csl_name),
-                        encoding="utf-8")
-                    return dropped
+                        _typst_wrapper(yaml, "body.typ"), encoding="utf-8")
 
-                dropped = await loop.run_in_executor(None, _assemble)
-                if dropped:
-                    # Worth saying out loud: the .bib has a real problem
-                    # that the docx path silently absorbs.
-                    plural = "y" if dropped == 1 else "ies"
-                    show_notification(
-                        state,
-                        f"Note: skipped {dropped} duplicate .bib entr{plural}",
-                        duration=6)
-
+                await loop.run_in_executor(None, _assemble)
                 typst_args = [typst, "compile", "--root", tmp_dir,
                               str(Path(tmp_dir) / "main.typ"), str(pdf_path)]
                 show_notification(

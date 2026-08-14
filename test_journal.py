@@ -22,7 +22,7 @@ from journal import (
     _lua_coverpage_filter, _lua_header_filter,
     _postprocess_docx, _REFS_DIR,
     _author_lastname, _format_export_date, _typst_str, _typst_wrapper,
-    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _dedupe_bib, _strip_bib_noise, _initial_pdf_engine, _strip_frontmatter, _resolve_csl_path,
+    _pdf_engine, _resolve_bib_path, _bundled_bin, _TEMPLATES_DIR, _initial_pdf_engine, _strip_frontmatter, _resolve_csl_path,
     _list_continuation, _ensure_writable, MarkdownLexer,
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
     _env_bin, _config_path, _default_vault, _normalise_pasted,
@@ -334,7 +334,7 @@ def test_typst_wrapper():
     y = {"title": "T", "author": "Jane Doe", "course": "C",
          "instructor": "I", "date": "2026-01-05", "style": "mla",
          "spacing": "single"}
-    src = _typst_wrapper(y, "body.typ", "refs.bib")
+    src = _typst_wrapper(y, "body.typ")
     assert '#import "journal.typ": conf' in src
     assert '#show: conf.with(' in src
     assert '#include "body.typ"' in src
@@ -343,20 +343,14 @@ def test_typst_wrapper():
     # Derived fields, not raw frontmatter.
     assert 'lastname: "Doe",' in src
     assert 'date: "5 January 2026",' in src
-    assert 'bib: "refs.bib",' in src
-
-    # No bibliography -> the literal none, not a quoted string.
-    assert 'bib: none,' in _typst_wrapper(y, "body.typ", None)
-
-    # csl: drives citation format -- a note style renders footnotes, so
-    # falling back to the author-date default would rewrite every
-    # citation in the document as an inline parenthetical.
-    assert 'csl: "style.csl",' in _typst_wrapper(y, "body.typ", "refs.bib", "style.csl")
-    assert 'csl: none,' in _typst_wrapper(y, "body.typ", "refs.bib")
+    # The bibliography is pandoc's job now, so the wrapper must not try to
+    # hand Typst one -- that path renders note-style citations as nested
+    # footnotes and loses them.
+    assert "bib:" not in src and "csl:" not in src
 
     # Absent frontmatter still produces every parameter, so the template
     # never sees a missing argument.
-    bare = _typst_wrapper({}, "body.typ", None)
+    bare = _typst_wrapper({}, "body.typ")
     for key in ("title", "author", "course", "instructor", "date",
                 "style", "spacing", "lastname"):
         assert f"{key}: " in bare, key
@@ -426,72 +420,6 @@ def test_resolve_bib_path():
         # Nothing to find at all.
         assert _resolve_bib_path({"bibliography": "x.bib"}, Path(tmpdir)) is None
     print("  Bib path resolution OK")
-
-
-def test_dedupe_bib():
-    # Typst rejects a duplicate key and fails the whole compile, where
-    # citeproc tolerates it -- so a real Zotero export can break only the
-    # Typst path. Keep the first occurrence, matching citeproc.
-    text = (
-        "@string{up = {Univ Press}}\n\n"
-        "@incollection{chesterton2005,\n  title = {The {{Blue Cross}}},\n}\n\n"
-        "@book{smith2020, author={Smith, Jane}}\n\n"
-        "@incollection{chesterton2005,\n  title = {A later duplicate},\n}\n"
-    )
-    cleaned, dropped = _dedupe_bib(text)
-    assert dropped == 1
-    assert cleaned.count("chesterton2005") == 1
-    assert "Blue Cross" in cleaned          # the first entry survived
-    assert "later duplicate" not in cleaned  # the second did not
-    assert "smith2020" in cleaned
-    assert "@string" in cleaned              # non-entries pass through
-
-    # Nothing to do is not an error, and the text must come back intact.
-    same, dropped = _dedupe_bib("@book{a, title={A}}\n@book{b, title={B}}\n")
-    assert dropped == 0
-    assert "a," in same and "b," in same
-    assert _dedupe_bib("") == ("", 0)
-
-    # Distinct keys that differ only in case are NOT duplicates; dropping
-    # one would silently lose a real entry.
-    _, dropped = _dedupe_bib("@book{Ab, x={1}}\n@book{aB, x={2}}\n")
-    assert dropped == 0
-    print("  Bib dedupe OK")
-
-
-def test_strip_bib_noise():
-    # A Zotero abstract carrying escaped HTML/math is enough to fail an
-    # entire library under Typst's BibLaTeX parser. No style renders it.
-    text = (
-        "@article{a,\n"
-        "  title = {Real Title},\n"
-        '  abstract = {\\${$<\\$$}p\\${$>\\$$}HTML junk\\${$<\\$$}/p\\${$>\\$$}},\n'
-        "  file = {C:\\\\path\\\\to\\\\file.pdf},\n"
-        "  keywords = {a,b,c},\n"
-        "  year = {2020}\n"
-        "}\n"
-    )
-    cleaned, removed = _strip_bib_noise(text)
-    assert removed == 3
-    for gone in ("abstract", "HTML junk", "file =", "keywords"):
-        assert gone not in cleaned, gone
-    # Everything that actually gets rendered survives.
-    assert "Real Title" in cleaned and "year = {2020}" in cleaned
-    assert cleaned.count("@article{a,") == 1
-    assert ",," not in cleaned.replace(" ", "")  # no doubled separators
-
-    # A field named like a noise field inside a *value* must not trigger.
-    keep = "@book{b, title = {On the abstract art of file keywords}}\n"
-    out, removed = _strip_bib_noise(keep)
-    assert removed == 0 and out == keep
-
-    # An unterminated value is left alone rather than truncating the file.
-    broken = "@book{c, abstract = {never closed\n"
-    out, removed = _strip_bib_noise(broken)
-    assert removed == 0 and "never closed" in out
-
-    assert _strip_bib_noise("") == ("", 0)
-    print("  Bib noise stripping OK")
 
 
 def test_initial_pdf_engine():
@@ -1295,8 +1223,6 @@ if __name__ == "__main__":
     test_resolve_bib_path()
     test_resolve_csl_path()
     test_strip_frontmatter()
-    test_dedupe_bib()
-    test_strip_bib_noise()
     test_initial_pdf_engine()
     test_bundled_bin()
     print("  \u2713 Typst export tests passed\n")
