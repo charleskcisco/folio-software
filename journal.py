@@ -180,6 +180,27 @@ class VaultStorage:
         _ensure_writable(self.pdf_dir)
         _ensure_writable(self.docx_dir)
 
+    def list_export_paths(self):
+        """The .pdf/.docx files that belong in the exports listing.
+
+        Skips hidden files. Syncing a vault from macOS drags AppleDouble
+        sidecars (._name.pdf) along with it, and they otherwise fill the
+        exports screen with entries that cannot be printed or shared --
+        on a writerdeck they crowded the real exports off the list.
+
+        Shared by the exports listing and the background watcher that
+        decides when to refresh it, so the two cannot disagree about
+        which files count. iter_md_paths exists for the same reason.
+        """
+        out = []
+        for d in (self.pdf_dir, self.docx_dir):
+            if not d.is_dir():
+                continue
+            for ext in ("*.pdf", "*.docx"):
+                out.extend(p for p in d.glob(ext)
+                           if not p.name.startswith("."))
+        return out
+
     def iter_md_paths(self):
         """Yield the .md files that belong in the vault listing.
 
@@ -3745,11 +3766,7 @@ def create_app(storage):
         _render_entries(query)
 
     def refresh_exports(query=""):
-        files = []
-        for d in (state.storage.pdf_dir, state.storage.docx_dir):
-            if d.is_dir():
-                for ext in ("*.pdf", "*.docx"):
-                    files.extend(d.glob(ext))
+        files = state.storage.list_export_paths()
         files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         state.export_paths = files
         filtered = files
@@ -4396,12 +4413,7 @@ def create_app(storage):
             return None
 
     def _exports_signature():
-        paths = []
-        for d in (state.storage.pdf_dir, state.storage.docx_dir):
-            if d.is_dir():
-                for ext in ("*.pdf", "*.docx"):
-                    paths.extend(d.glob(ext))
-        return _vault_signature(paths)
+        return _vault_signature(state.storage.list_export_paths())
 
     def _refresh_preserving_selection(widget, do_refresh, query):
         # Keep the cursor on the same file across a background refresh,
