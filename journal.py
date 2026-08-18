@@ -970,6 +970,120 @@ def _author_lastname(yaml: dict) -> str:
     return parts[-1] if parts else ""
 
 
+# Rough width of one character of 12pt Times, in twips, and the cell
+# padding the Table style adds on each side. Both are estimates -- there
+# is no font metric available here -- so the column algorithm below only
+# has to be roughly right, and errs toward giving a column more room
+# than it needs.
+_CHAR_TWIPS = 125
+_CELL_PAD_TWIPS = 216
+_TEXT_WIDTH_TWIPS = 9360  # us-letter less the 1in side margins
+
+
+def _column_widths(rows: list, total: int = _TEXT_WIDTH_TWIPS) -> list:
+    """Distribute table width by what each column actually holds.
+
+    pandoc sizes columns from the dash counts in the markdown separator
+    row, which is a drawing of the source rather than an instruction
+    about the output -- a row like
+
+        | ---- | ---- | ------ | -------------------------------- |
+
+    puts 83% of the page in the last column and leaves a "Date" heading
+    three characters wide, wrapping it to three lines.
+
+    So measure the content instead. Each column asks for enough room to
+    hold its widest cell, and at minimum enough for its longest single
+    word, so nothing breaks mid-word. Those requests usually exceed the
+    page, and the fair way to settle it is to fill the smallest first:
+    take the width evenly available, give any column asking for less
+    than that exactly what it asked for, and re-divide what is left
+    among the rest. Narrow columns end up at their natural size and the
+    prose column absorbs the remainder, which is what a person laying
+    the table out by hand would do.
+    """
+    n = max((len(r) for r in rows), default=0)
+    if not n:
+        return []
+    want, need = [0] * n, [0] * n
+    for row in rows:
+        for i, cell in enumerate(row[:n]):
+            longest_word = max((len(w) for w in cell.split()), default=1)
+            need[i] = max(need[i], longest_word)
+            want[i] = max(want[i], len(cell))
+    to_tw = lambda c: c * _CHAR_TWIPS + _CELL_PAD_TWIPS
+    need = [to_tw(max(3, c)) for c in need]
+    want = [max(nd, to_tw(w)) for nd, w in zip(need, want)]
+
+    out = [0] * n
+    remaining, left = total, sorted(range(n), key=lambda i: want[i])
+    while left:
+        share = remaining // len(left)
+        i = left[0]
+        if want[i] > share:
+            # Everything still unassigned wants more than its share, so
+            # split what is left in proportion to the asking.
+            tw = sum(want[j] for j in left) or 1
+            alloc = {j: max(need[j], remaining * want[j] // tw) for j in left}
+            # need is a floor, not a guarantee: one unbreakable word can
+            # be wider than the paper -- a bare URL, say -- and three of
+            # them would otherwise produce a table three pages wide.
+            # Scale back together and let the word break instead.
+            over = sum(alloc.values())
+            if over > remaining:
+                alloc = {j: max(1, v * remaining // over)
+                         for j, v in alloc.items()}
+            for j, v in alloc.items():
+                out[j] = v
+            remaining = 0
+            break
+        out[i] = want[i]
+        remaining -= want[i]
+        left.pop(0)
+    # Every column got what it asked for and there is page left over.
+    # pandoc sets the table to 100% width, so hand the slack to the
+    # widest column rather than leaving the grid and the table
+    # disagreeing about how wide the thing is.
+    if remaining > 0 and out:
+        out[out.index(max(out))] += remaining
+    return out
+
+
+def _cell_text_rows(table_xml: str) -> list:
+    """Plain text of each cell, row by row."""
+    rows = []
+    for tr in re.findall(r"<w:tr\b.*?</w:tr>", table_xml, re.S):
+        rows.append(["".join(re.findall(r"<w:t[^>]*>([^<]*)</w:t>", tc))
+                     for tc in re.findall(r"<w:tc>.*?</w:tc>", tr, re.S)])
+    return rows
+
+
+def _autofit_tables(document_xml: bytes) -> bytes:
+    """Re-size every table's columns to fit their contents.
+
+    Nothing in the reference .docx can do this: the widths are direct
+    formatting written onto each table, and direct formatting wins over
+    a style.
+    """
+    def one(m):
+        tbl = m.group(0)
+        widths = _column_widths(_cell_text_rows(tbl))
+        if not widths:
+            return tbl
+        gi = iter(widths)
+        tbl = re.sub(r'<w:gridCol w:w="\d+"\s*/>',
+                     lambda _: '<w:gridCol w:w="%d"/>' % next(gi, widths[-1]), tbl)
+        ci = iter(widths * (len(_cell_text_rows(tbl)) + 1))
+        tbl = re.sub(r'<w:tcW w:type="dxa" w:w="\d+"\s*/>',
+                     lambda _: '<w:tcW w:type="dxa" w:w="%d"/>' % next(ci, widths[-1]),
+                     tbl)
+        return tbl
+
+    xml = document_xml.decode("utf-8")
+    xml = re.sub(r"<w:tbl>.*?</w:tbl>", one, xml, flags=re.S)
+    return xml.encode("utf-8")
+
+
 def _postprocess_docx(docx_path: str, yaml: dict) -> None:
     """Strip headers/footers and replace {{LASTNAME}} in DOCX zip."""
     fmt = yaml.get("style", "")
@@ -986,7 +1100,9 @@ def _postprocess_docx(docx_path: str, yaml: dict) -> None:
                 is_header = re.match(r"word/header\d*\.xml", item.filename)
                 is_footer = re.match(r"word/footer\d*\.xml", item.filename)
 
-                if strip_headers and is_header:
+                if item.filename == "word/document.xml":
+                    data = _autofit_tables(data)
+                elif strip_headers and is_header:
                     data = _EMPTY_HEADER_XML
                 elif strip_footers and is_footer:
                     data = _EMPTY_FOOTER_XML

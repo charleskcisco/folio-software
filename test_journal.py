@@ -28,6 +28,7 @@ from journal import (
     _env_bin, _config_path, _default_vault, _normalise_pasted,
     _detect_clipboard, _no_console, safe_entry_name, _ILLEGAL_CHARS,
     _template_name, _DEFAULT_TEMPLATE, _default_csl_path, _CSL_DIR,
+    _column_widths, _cell_text_rows, _autofit_tables, _TEXT_WIDTH_TWIPS,
 )
 
 
@@ -560,6 +561,62 @@ def test_bundled_csls_are_the_right_class():
     for src in (chicago, mla):
         assert "creativecommons.org/licenses/by-sa" in src
     print("  Bundled CSLs are the right class OK")
+
+
+def test_column_widths_fit_the_page():
+    rows = [["Date", "Period", "Class", "Notes"],
+            ["26 Aug", "1", "Rhetoric", "Lesson: Intro to thesis project"],
+            ["14 Sep", "1", "Rhetoric",
+             "Lesson: relationship and circumstance; speech 01 proposal work"]]
+    w = _column_widths(rows)
+    assert len(w) == 4
+    assert sum(w) <= _TEXT_WIDTH_TWIPS, sum(w)
+    # The prose column takes the slack; the narrow ones stay narrow.
+    assert w[3] > sum(w[:3]), w
+    # And none is squeezed below its longest word. pandoc's dash-derived
+    # widths gave "Date" 5% of the page and wrapped it to three lines.
+    for i, col in enumerate(("Date", "Period", "Class")):
+        assert w[i] >= len(col) * 100, (col, w[i])
+    print("  Column widths fit the page OK")
+
+
+def test_column_widths_edge_cases():
+    # A table of nothing must not divide by zero or emit a negative width.
+    assert _column_widths([]) == []
+    assert _column_widths([[]]) == []
+    # Ragged rows: size to the widest row rather than crashing.
+    w = _column_widths([["a"], ["a", "b", "c"]])
+    assert len(w) == 3 and all(x > 0 for x in w)
+    # Every column wanting more than its share still fits the page.
+    long = "x" * 400
+    w = _column_widths([[long, long, long]])
+    assert sum(w) <= _TEXT_WIDTH_TWIPS and all(x > 0 for x in w), w
+    print("  Column width edge cases OK")
+
+
+def test_autofit_rewrites_table_widths():
+    doc = (b'<w:document><w:body><w:tbl><w:tblGrid>'
+           b'<w:gridCol w:w="392"/><w:gridCol w:w="6610"/></w:tblGrid>'
+           b'<w:tr><w:tc><w:tcW w:type="dxa" w:w="392"/><w:p><w:r>'
+           b'<w:t>Date</w:t></w:r></w:p></w:tc>'
+           b'<w:tc><w:tcW w:type="dxa" w:w="6610"/><w:p><w:r>'
+           b'<w:t>Notes about the lesson</w:t></w:r></w:p></w:tc></w:tr>'
+           b'</w:tbl></w:body></w:document>')
+    out = _autofit_tables(doc).decode("utf-8")
+    assert 'w:w="392"' not in out, "pandoc's dash-derived width survived"
+    assert out.count("<w:gridCol") == 2
+    print("  Autofit rewrites table widths OK")
+
+
+def test_cell_text_rows():
+    tbl = ('<w:tbl><w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r>'
+           '<w:r><w:t xml:space="preserve"> B</w:t></w:r></w:p></w:tc>'
+           '<w:tc><w:p><w:r><w:t>C</w:t></w:r></w:p></w:tc></w:tr></w:tbl>')
+    # Runs within a cell must join: pandoc splits a cell across runs at
+    # every formatting change, and measuring only the first would size
+    # the column to a fragment.
+    assert _cell_text_rows(tbl) == [["A B", "C"]]
+    print("  Cell text extraction OK")
 
 
 def test_pdf_engine_routing():
@@ -1428,6 +1485,10 @@ if __name__ == "__main__":
     test_default_csl_by_style()
     test_explicit_csl_wins_over_default()
     test_bundled_csls_are_the_right_class()
+    test_column_widths_fit_the_page()
+    test_column_widths_edge_cases()
+    test_autofit_rewrites_table_widths()
+    test_cell_text_rows()
     test_journal_template_untouched_by_new_ones()
     test_line_box_pinned_explicitly()
     test_first_line_indent_matches_reference_docx()
