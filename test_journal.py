@@ -513,9 +513,9 @@ def test_default_csl_by_style():
     # and a Turabian note asking for footnotes silently renders
     # "(Smith 2020)" -- a plausible document in the wrong style.
     assert _default_csl_path({"style": "chicago"}).name == \
-        "chicago-fullnote-bibliography.csl"
+        "chicago-notes-bibliography.csl"
     assert _default_csl_path({"style": "turabian"}).name == \
-        "chicago-fullnote-bibliography.csl"
+        "chicago-notes-bibliography.csl"
     assert _default_csl_path({"style": "MLA "}).name == \
         "modern-language-association.csl"
     # No style, and unknown styles, stay on pandoc's default.
@@ -539,7 +539,7 @@ def test_explicit_csl_wins_over_default():
         # Better the style's default than pandoc's unrelated one.
         got = _resolve_csl_path(
             {"style": "chicago", "csl": "/gone/elsewhere.csl"}, vault)
-        assert got is not None and got.name == "chicago-fullnote-bibliography.csl"
+        assert got is not None and got.name == "chicago-notes-bibliography.csl"
 
         # Still nothing to fall back to when the style implies no default.
         assert _resolve_csl_path({"csl": "/gone/elsewhere.csl"}, vault) is None
@@ -550,7 +550,7 @@ def test_bundled_csls_are_the_right_class():
     # class="note" is what makes Chicago render footnotes rather than
     # author-date; "in-text" is what MLA needs. Swapping the files for
     # the wrong variant would look fine until someone read the output.
-    chicago = (_CSL_DIR / "chicago-fullnote-bibliography.csl").read_text(
+    chicago = (_CSL_DIR / "chicago-notes-bibliography.csl").read_text(
         encoding="utf-8")
     assert 'class="note"' in chicago
     mla = (_CSL_DIR / "modern-language-association.csl").read_text(

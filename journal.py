@@ -1144,8 +1144,8 @@ def _strip_frontmatter(content: str) -> str:
 # got "(Smith 2020)" instead -- a plausible-looking document in the wrong
 # style, which is the worst way to be wrong.
 _DEFAULT_CSLS = {
-    "chicago": "chicago-fullnote-bibliography.csl",
-    "turabian": "chicago-fullnote-bibliography.csl",
+    "chicago": "chicago-notes-bibliography.csl",
+    "turabian": "chicago-notes-bibliography.csl",
     "mla": "modern-language-association.csl",
 }
 
