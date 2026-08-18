@@ -85,6 +85,20 @@
       align(right)[#lastname #context counter(page).display()]
     },
     header-ascent: 0.35in,
+    // _postprocess_docx keeps the footer for chicago and strips it for
+    // mla (strip_footers = fmt == "mla"), so the Turabian output carries
+    // a centred "Lastname N" that this template rendered nowhere. It is
+    // absent from the cover, which is page 1, and the counter is not
+    // reset -- the first body page really is numbered 2.
+    footer: if style == "chicago" and lastname != "" {
+      context {
+        if counter(page).get().first() > 1 {
+          set text(font: body-fonts, size: 12pt)
+          align(center)[#lastname #counter(page).display()]
+        }
+      }
+    },
+    footer-descent: 0.2in,
   )
 
   // Pin the line box so leading-single / leading-double above are
@@ -140,8 +154,13 @@
   if style == "chicago" {
     // Turabian cover page. w:before=2400tw = 1.667in above the title;
     // gap_before_author = 4320tw = 3in between title and the info block.
-    // The cover is always single-spaced regardless of the body setting.
-    set par(leading: leading-single, spacing: leading-single,
+    //
+    // The cover is always DOUBLE spaced regardless of the body setting:
+    // _lua_coverpage_filter writes w:line="480" on every cover paragraph
+    // rather than passing the note's spacing through. (This comment used
+    // to say single, which is what the template implemented and what the
+    // docx has never done.)
+    set par(leading: leading-double, spacing: leading-double,
             first-line-indent: 0pt)
     v(1.667in)
     align(center)[#title]
@@ -151,6 +170,14 @@
       #info.join(linebreak())
     ]
     pagebreak(weak: true)
+    // The filter carries its page break on an empty paragraph --
+    // <w:p><w:pPr><w:pageBreakBefore/></w:pPr></w:p> -- which lands as a
+    // blank line at the top of the body page, and BodyText's 9pt
+    // w:before follows it. Both are fixed sizes, which is why the offset
+    // measures the same 23.8pt whether the note is single or double
+    // spaced. Typst suppresses block spacing at a page boundary, so
+    // nothing reproduces it unless it is asked for explicitly.
+    v(23.8pt, weak: false)
   } else if style == "" or style == "basic" {
     // No style: named. pandoc's --standalone renders title/author/date
     // from the note's metadata through the reference doc's Title, Author
@@ -183,7 +210,12 @@
   } else if style == "mla" {
     // MLA header block: name / instructor / course / date, flush left and
     // double-spaced, followed by a centred title.
-    set par(first-line-indent: 0pt)
+    // spacing is leading alone, without para-extra: in the docx the
+    // header block and the title are consecutive lines of one
+    // double-spaced run, not two paragraphs with a gap between them.
+    // The title-to-body gap still gets para-extra, from the body's own
+    // spacing outside this branch.
+    set par(first-line-indent: 0pt, spacing: leading)
     let info = (author, instructor, course, date).filter(x => x != "")
     if info.len() > 0 {
       info.join(linebreak())
