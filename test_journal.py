@@ -437,7 +437,7 @@ def test_initial_pdf_engine():
             assert _initial_pdf_engine({}) == "typst"
 
             # Config exists but predates the setting -> leave it alone.
-            cfgp.write_text('{"vault": "/home/x/Documents"}')
+            cfgp.write_text('{"vault": "/home/x/Documents"}', encoding="utf-8")
             assert _initial_pdf_engine({"vault": "/home/x/Documents"}) == "libreoffice"
 
             # An explicit choice always wins, either way.
@@ -484,7 +484,7 @@ def test_resolve_csl_path():
         vault = Path(tmpdir)
         (vault / "sources").mkdir()
         csl = vault / "sources" / "chicago.csl"
-        csl.write_text("<style/>")
+        csl.write_text("<style/>", encoding="utf-8")
 
         # Absolute path as written.
         assert _resolve_csl_path({"csl": str(csl)}, vault) == csl
