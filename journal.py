@@ -317,6 +317,7 @@ class VaultStorage:
 _APP_DIR = Path(__file__).resolve().parent
 _REFS_DIR = _APP_DIR / "refs"
 _TEMPLATES_DIR = _APP_DIR / "templates"
+_CSL_DIR = _APP_DIR / "csl"
 _SCREENSHOTS_DIR = _APP_DIR / "screenshots"
 _DEFAULT_SPACING = "double"
 
@@ -1137,8 +1138,33 @@ def _strip_frontmatter(content: str) -> str:
     return content[m.end():] if m else content
 
 
+# Citation style implied by a note's style:, used when it names no csl:
+# of its own. Without this pandoc falls back to its built-in
+# chicago-author-date, so a Turabian note asking for footnotes quietly
+# got "(Smith 2020)" instead -- a plausible-looking document in the wrong
+# style, which is the worst way to be wrong.
+_DEFAULT_CSLS = {
+    "chicago": "chicago-fullnote-bibliography.csl",
+    "turabian": "chicago-fullnote-bibliography.csl",
+    "mla": "modern-language-association.csl",
+}
+
+
+def _default_csl_path(yaml: dict) -> Optional[Path]:
+    """Bundled CSL for this note's style:, or None."""
+    name = _DEFAULT_CSLS.get(str(yaml.get("style", "")).strip().lower())
+    if not name:
+        return None
+    p = _CSL_DIR / name
+    return p if p.is_file() else None
+
+
 def _resolve_csl_path(yaml: dict, vault_dir: Path) -> Optional[Path]:
-    """Locate the .csl named by csl: in the frontmatter, or None.
+    """Locate the .csl for this note, or None.
+
+    An explicit csl: always wins -- a vault that has curated its own
+    style must keep it. Only when the note names none does the style:
+    default apply.
 
     Tries the literal value, then the same name relative to the vault and
     to vault/sources -- frontmatter often carries an absolute path from
@@ -1146,7 +1172,7 @@ def _resolve_csl_path(yaml: dict, vault_dir: Path) -> Optional[Path]:
     """
     val = (yaml.get("csl") or "").strip()
     if not val:
-        return None
+        return _default_csl_path(yaml)
     name = Path(val).name
     for cand in (Path(val).expanduser(), vault_dir / val,
                  vault_dir / "sources" / name, vault_dir / name):
@@ -1155,7 +1181,9 @@ def _resolve_csl_path(yaml: dict, vault_dir: Path) -> Optional[Path]:
                 return cand
         except OSError:
             continue
-    return None
+    # Named but not found -- on another machine, say. Better the style's
+    # own default than pandoc's unrelated one.
+    return _default_csl_path(yaml)
 
 
 def _initial_pdf_engine(cfg: dict) -> str:

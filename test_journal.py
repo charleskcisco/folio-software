@@ -27,7 +27,7 @@ from journal import (
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
     _env_bin, _config_path, _default_vault, _normalise_pasted,
     _detect_clipboard, _no_console, safe_entry_name, _ILLEGAL_CHARS,
-    _template_name, _DEFAULT_TEMPLATE,
+    _template_name, _DEFAULT_TEMPLATE, _default_csl_path, _CSL_DIR,
 )
 
 
@@ -506,6 +506,60 @@ def test_journal_typ_has_no_style_branches():
                   "spacing", "lastname"):
         assert f"{param}:" in code, param
     print("  journal.typ is the unstyled template OK")
+
+
+def test_default_csl_by_style():
+    # Without this, pandoc falls back to its built-in chicago-author-date
+    # and a Turabian note asking for footnotes silently renders
+    # "(Smith 2020)" -- a plausible document in the wrong style.
+    assert _default_csl_path({"style": "chicago"}).name == \
+        "chicago-fullnote-bibliography.csl"
+    assert _default_csl_path({"style": "turabian"}).name == \
+        "chicago-fullnote-bibliography.csl"
+    assert _default_csl_path({"style": "MLA "}).name == \
+        "modern-language-association.csl"
+    # No style, and unknown styles, stay on pandoc's default.
+    assert _default_csl_path({}) is None
+    assert _default_csl_path({"style": "apa"}) is None
+    print("  Default CSL by style OK")
+
+
+def test_explicit_csl_wins_over_default():
+    with tempfile.TemporaryDirectory() as td:
+        vault = Path(td)
+        (vault / "sources").mkdir()
+        own = vault / "sources" / "house.csl"
+        own.write_text("<style/>", encoding="utf-8")
+
+        # A vault that curated its own style keeps it.
+        got = _resolve_csl_path({"style": "chicago", "csl": "sources/house.csl"}, vault)
+        assert got == own, got
+
+        # Named but missing -- an absolute path from another machine, say.
+        # Better the style's default than pandoc's unrelated one.
+        got = _resolve_csl_path(
+            {"style": "chicago", "csl": "/gone/elsewhere.csl"}, vault)
+        assert got is not None and got.name == "chicago-fullnote-bibliography.csl"
+
+        # Still nothing to fall back to when the style implies no default.
+        assert _resolve_csl_path({"csl": "/gone/elsewhere.csl"}, vault) is None
+    print("  Explicit csl: wins over the default OK")
+
+
+def test_bundled_csls_are_the_right_class():
+    # class="note" is what makes Chicago render footnotes rather than
+    # author-date; "in-text" is what MLA needs. Swapping the files for
+    # the wrong variant would look fine until someone read the output.
+    chicago = (_CSL_DIR / "chicago-fullnote-bibliography.csl").read_text(
+        encoding="utf-8")
+    assert 'class="note"' in chicago
+    mla = (_CSL_DIR / "modern-language-association.csl").read_text(
+        encoding="utf-8")
+    assert 'class="in-text"' in mla
+    # Redistributed under CC BY-SA; keep the rights element intact.
+    for src in (chicago, mla):
+        assert "creativecommons.org/licenses/by-sa" in src
+    print("  Bundled CSLs are the right class OK")
 
 
 def test_pdf_engine_routing():
@@ -1371,6 +1425,9 @@ if __name__ == "__main__":
     test_new_templates_exist()
     test_new_templates_expose_conf()
     test_mla_date_keys_off_style()
+    test_default_csl_by_style()
+    test_explicit_csl_wins_over_default()
+    test_bundled_csls_are_the_right_class()
     test_journal_template_untouched_by_new_ones()
     test_line_box_pinned_explicitly()
     test_first_line_indent_matches_reference_docx()
