@@ -482,22 +482,30 @@ def test_line_box_pinned_explicitly():
     print("  Line box pinned by length OK")
 
 
-def test_journal_typ_matches_docx_running_elements():
-    # _postprocess_docx strips headers for everything but mla and strips
-    # footers only for mla, so the two styles carry different running
-    # elements and journal.typ has to agree with that split.
+def test_journal_typ_has_no_style_branches():
+    # journal.typ is now reached only by notes with no style: or an
+    # unrecognised one -- mla and chicago have templates of their own. It
+    # therefore renders its front matter unconditionally, and carries no
+    # running head or footer, both of which belonged to those styles.
+    #
+    # The unconditional part matters: the front matter used to be guarded
+    # on `style == "" or style == "basic"`, so a note whose style: was a
+    # typo fell back to this template and then silently lost its title,
+    # author and date.
     src = (_TEMPLATES_DIR / "journal.typ").read_text(encoding="utf-8")
-    assert 'header: if style == "mla"' in src
-    assert 'footer: if style == "chicago"' in src
+    code = "\n".join(l for l in src.splitlines()
+                     if not l.lstrip().startswith("//"))
+    assert "style ==" not in code, "journal.typ regained a style branch"
+    assert "header:" not in code, "journal.typ regained a running head"
+    assert "footer:" not in code, "journal.typ regained a footer"
 
-    # The cover is double-spaced: _lua_coverpage_filter writes
-    # w:line="480" on every cover paragraph rather than passing the
-    # note's spacing through. The template said single for a long time.
-    lua = _lua_coverpage_filter({"title": "T", "author": "A"})
-    assert 'w:line="480"' in lua
-    i = src.index("Turabian cover page")
-    assert "leading-double" in src[i:i + 700], "cover reverted to single"
-    print("  Running elements match the docx split OK")
+    # The parameter itself has to stay: _typst_wrapper passes the same
+    # arguments to every template, so dropping it breaks the import.
+    assert "style:" in code
+    for param in ("title", "author", "course", "instructor", "date",
+                  "spacing", "lastname"):
+        assert f"{param}:" in code, param
+    print("  journal.typ is the unstyled template OK")
 
 
 def test_pdf_engine_routing():
@@ -1366,7 +1374,7 @@ if __name__ == "__main__":
     test_journal_template_untouched_by_new_ones()
     test_line_box_pinned_explicitly()
     test_first_line_indent_matches_reference_docx()
-    test_journal_typ_matches_docx_running_elements()
+    test_journal_typ_has_no_style_branches()
     print("  \u2713 Typst export tests passed\n")
 
     print("Testing tool detection...")

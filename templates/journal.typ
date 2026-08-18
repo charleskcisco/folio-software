@@ -71,6 +71,9 @@
   lastname: "",
   doc,
 ) = {
+  // style, course, instructor and lastname are accepted and unused.
+  // _typst_wrapper passes the same arguments to every template, and the
+  // styles that needed them now have templates of their own.
   let leading = if spacing == "single" { leading-single } else { leading-double }
 
   // pgMar: left/right 1440tw = 1in; top 2204tw = 1.531in; bottom 2206tw =
@@ -78,27 +81,6 @@
   set page(
     paper: "us-letter",
     margin: (left: 1in, right: 1in, top: 1.531in, bottom: 1.532in),
-    // Only MLA gets a running head; the docx path achieves the same thing
-    // by stripping header XML for every other style.
-    header: if style == "mla" and lastname != "" {
-      set text(font: body-fonts, size: 12pt)
-      align(right)[#lastname #context counter(page).display()]
-    },
-    header-ascent: 0.35in,
-    // _postprocess_docx keeps the footer for chicago and strips it for
-    // mla (strip_footers = fmt == "mla"), so the Turabian output carries
-    // a centred "Lastname N" that this template rendered nowhere. It is
-    // absent from the cover, which is page 1, and the counter is not
-    // reset -- the first body page really is numbered 2.
-    footer: if style == "chicago" and lastname != "" {
-      context {
-        if counter(page).get().first() > 1 {
-          set text(font: body-fonts, size: 12pt)
-          align(center)[#lastname #counter(page).display()]
-        }
-      }
-    },
-    footer-descent: 0.2in,
   )
 
   // Pin the line box so leading-single / leading-double above are
@@ -145,50 +127,35 @@
   // Declared before doc, since a show rule only affects what follows it.
   show <refs>: it => {
     pagebreak(weak: true)
-    heading(level: 1, if style == "mla" { "Works Cited" } else { "Bibliography" })
+    heading(level: 1, "Bibliography")
     set par(hanging-indent: 0.5in, first-line-indent: 0pt)
     it
   }
 
   // ── Front matter ───────────────────────────────────────────────────────
-  if style == "chicago" {
-    // Turabian cover page. w:before=2400tw = 1.667in above the title;
-    // gap_before_author = 4320tw = 3in between title and the info block.
-    //
-    // The cover is always DOUBLE spaced regardless of the body setting:
-    // _lua_coverpage_filter writes w:line="480" on every cover paragraph
-    // rather than passing the note's spacing through. (This comment used
-    // to say single, which is what the template implemented and what the
-    // docx has never done.)
-    set par(leading: leading-double, spacing: leading-double,
-            first-line-indent: 0pt)
-    v(1.667in)
-    align(center)[#title]
-    v(3in)
-    align(center)[
-      #let info = (author, course, instructor, date).filter(x => x != "")
-      #info.join(linebreak())
-    ]
-    pagebreak(weak: true)
-    // The filter carries its page break on an empty paragraph --
-    // <w:p><w:pPr><w:pageBreakBefore/></w:pPr></w:p> -- which lands as a
-    // blank line at the top of the body page, and BodyText's 9pt
-    // w:before follows it. Both are fixed sizes, which is why the offset
-    // measures the same 23.8pt whether the note is single or double
-    // spaced. Typst suppresses block spacing at a page boundary, so
-    // nothing reproduces it unless it is asked for explicitly.
-    v(23.8pt, weak: false)
-  } else if style == "" or style == "basic" {
-    // No style: named. pandoc's --standalone renders title/author/date
-    // from the note's metadata through the reference doc's Title, Author
-    // and Date styles, so the docx chain has always produced a centred
-    // block here and this template produced nothing at all.
-    //
-    // Title is 28pt centred with w:after=80tw; Author and Date are 12pt
-    // centred. The three gaps below are measured off a LibreOffice
-    // render rather than derived, because Word's box model and
-    // LibreOffice's interpretation of it do not agree closely enough to
-    // compute them: the target is where the ink actually lands.
+  //
+  // pandoc's --standalone renders title/author/date from the note's
+  // metadata through the reference doc's Title, Author and Date styles,
+  // so the docx chain has always produced a centred block here.
+  //
+  // Unconditional: mla and chicago route to their own templates now, so
+  // every note reaching this one wants exactly this block. It used to be
+  // guarded on `style == "" or style == "basic"`, which meant a note
+  // whose style: was a typo -- anything that falls back to this template
+  // -- silently lost its title, author and date altogether.
+  //
+  // Title is 28pt centred with w:after=80tw; Author and Date are 12pt
+  // centred. The three gaps below are measured off a LibreOffice render
+  // rather than derived, because Word's box model and LibreOffice's
+  // interpretation of it do not agree closely enough to compute them:
+  // the target is where the ink actually lands.
+  //
+  // Braced so the set rule stays inside it. These values are the front
+  // matter's own -- single leading, no paragraph gap, no indent -- and
+  // must not reach the body, which is double-spaced and indented. A set
+  // rule runs to the end of its enclosing block, so at conf()'s top
+  // level it would silently restyle the whole document.
+  {
     set par(leading: leading-single, spacing: 0pt, first-line-indent: 0pt)
     if title != "" {
       align(center)[#text(size: 28pt)[#title]]
@@ -200,29 +167,12 @@
     }
     if date != "" {
       align(center)[#date]
-      // The body's first paragraph arrives with its own above-spacing of
-      // leading + para-extra. In the docx the gap after Date is only its
-      // line advance plus BodyText's 9pt w:before, which is smaller --
-      // and block spacing takes the maximum, so it cannot be reduced by
-      // adding. Cancel the difference instead.
+      // The body's first paragraph arrives with its own above-spacing
+      // of leading + para-extra. In the docx the gap after Date is only
+      // its line advance plus BodyText's 9pt w:before, which is smaller
+      // -- and block spacing takes the maximum, so it cannot be reduced
+      // by adding. Cancel the difference instead.
       v(9.5pt - (leading + para-extra), weak: false)
-    }
-  } else if style == "mla" {
-    // MLA header block: name / instructor / course / date, flush left and
-    // double-spaced, followed by a centred title.
-    // spacing is leading alone, without para-extra: in the docx the
-    // header block and the title are consecutive lines of one
-    // double-spaced run, not two paragraphs with a gap between them.
-    // The title-to-body gap still gets para-extra, from the body's own
-    // spacing outside this branch.
-    set par(first-line-indent: 0pt, spacing: leading)
-    let info = (author, instructor, course, date).filter(x => x != "")
-    if info.len() > 0 {
-      info.join(linebreak())
-      linebreak()
-    }
-    if title != "" {
-      align(center)[#title]
     }
   }
 
