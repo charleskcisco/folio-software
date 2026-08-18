@@ -102,13 +102,38 @@
 
   show raw: set text(font: mono-fonts)
 
-  // Turabian headings are distinguished by placement and weight rather
-  // than by size: level 1 centred and bold, level 2 centred and regular,
-  // level 3 flush left. All at body size.
+  // Turabian distinguishes its five heading levels by placement and
+  // weight, never by size -- all of them sit at body size:
+  //
+  //   1  centred, bold
+  //   2  centred, regular
+  //   3  flush left, bold
+  //   4  flush left, regular
+  //   5  run in at the head of its own paragraph, bold, ending with a
+  //      period, with the text continuing on the same line
+  //
+  // The manual permits italic wherever bold is used at 1, 3 and 5; bold
+  // is chosen consistently here so the three read as one system.
+  //
+  // Capitalisation is the writer's business, not the template's: levels
+  // 1 to 3 take headline style and 4 to 5 sentence style, and nothing
+  // here changes the case of what was typed.
   show heading: set text(font: body-fonts, size: 12pt, weight: "regular")
   show heading: set block(above: leading-double, below: leading-double)
   show heading.where(level: 1): it => align(center)[#strong(it.body)]
   show heading.where(level: 2): it => align(center)[#it.body]
+  // set, not a content rule: returning strong(it.body) yields inline
+  // content, which drops the heading's block and runs it into the
+  // paragraph beneath. That is what level 5 wants and what level 3 must
+  // not do.
+  show heading.where(level: 3): set text(weight: "bold")
+
+  // Level 5 is a paragraph opening rather than a line of its own, so it
+  // cannot use the block spacing above: the heading and the text that
+  // follows it are one paragraph. Typst has no way to pull the next
+  // block up, so the run-in is emitted as an inline box with no space
+  // after it and the following text flows on.
+  show heading.where(level: 5): it => box(strong[#it.body.])
 
   // Block quotations are indented and set single-spaced, which is one of
   // the few places Turabian departs from double spacing throughout.

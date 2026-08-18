@@ -814,6 +814,28 @@ def test_typst_writer_disables_native_citations():
     print("  Typst native citations disabled OK")
 
 
+def test_turabian_heading_levels():
+    # Turabian separates its five levels by placement and weight, never
+    # by size, so every level must stay at body size.
+    src = (_TEMPLATES_DIR / "turabian.typ").read_text(encoding="utf-8")
+    for lvl in (1, 2, 3, 5):
+        assert f"heading.where(level: {lvl})" in src, lvl
+    assert "size: 20pt" not in src and "size: 16pt" not in src
+
+    # Level 3 must be a `set` rule. Returning strong(it.body) yields
+    # inline content, which drops the heading's block and runs it into
+    # the paragraph below -- it rendered as "Level Three Flush Left Bold
+    # Body text under level three." on one line.
+    i = src.index("heading.where(level: 3)")
+    assert "set text(weight:" in src[i:i + 80], src[i:i + 80]
+
+    # Level 5 is the opposite: it *must* be inline, because the heading
+    # and the sentence after it are one paragraph.
+    j = src.index("heading.where(level: 5)")
+    assert "box(" in src[j:j + 90], src[j:j + 90]
+    print("  Turabian heading levels OK")
+
+
 def test_pdf_engine_routing():
     saved = os.environ.pop("JOURNAL_PDF_ENGINE", None)
     try:
@@ -1695,6 +1717,7 @@ if __name__ == "__main__":
     test_rts_flags_are_removable()
     test_cite_timeout_is_larger()
     test_typst_writer_disables_native_citations()
+    test_turabian_heading_levels()
     test_strip_bib_noise_removes_only_noise()
     test_strip_bib_noise_leaves_unterminated_fields_alone()
     test_bib_value_end_forms()
