@@ -1028,7 +1028,11 @@ def _format_export_date(yaml: dict) -> str:
     if not 1 <= month <= 12:
         return raw
     name = _MONTH_NAMES[month - 1]
-    if yaml.get("style", "") == "mla":
+    # template: mla counts as MLA too. Existing notes carry no template:
+    # key, so this cannot change what any of them already render.
+    mla = (yaml.get("style", "") == "mla"
+           or str(yaml.get("template", "")).strip().lower() == "mla")
+    if mla:
         return f"{day} {name} {year}"
     return f"{name} {day}, {year}"
 
@@ -1036,6 +1040,30 @@ def _format_export_date(yaml: dict) -> str:
 def _typst_str(s: str) -> str:
     """Quote a Python string as a Typst string literal."""
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+# Templates a note may opt into by name. The default is deliberately the
+# empty string -> journal.typ: that template is transcribed from
+# refs/*.docx so the Typst and LibreOffice engines stay comparable, and a
+# device happily exporting through it must not change what it produces
+# because new files appeared in templates/. These are additions, not
+# replacements.
+_DEFAULT_TEMPLATE = "journal.typ"
+_TEMPLATES = {
+    "mla": "mla.typ",
+    "turabian": "turabian.typ",
+    "chicago": "turabian.typ",
+}
+
+
+def _template_name(yaml: dict) -> str:
+    """Filename of the .typ template that renders this note.
+
+    Anything unrecognised falls back to the default rather than failing:
+    a typo in template: should not cost a student their export.
+    """
+    key = str(yaml.get("template", "") or "").strip().lower()
+    return _TEMPLATES.get(key, _DEFAULT_TEMPLATE)
 
 
 def _typst_wrapper(yaml: dict, body_name: str) -> str:
@@ -4403,7 +4431,7 @@ def create_app(storage):
             if not typst:
                 show_notification(state, "typst not found for PDF export.")
                 return
-            template = _TEMPLATES_DIR / "journal.typ"
+            template = _TEMPLATES_DIR / _template_name(yaml)
             if not template.is_file():
                 show_notification(
                     state, f"Missing export template: {template.name}")

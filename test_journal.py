@@ -27,6 +27,7 @@ from journal import (
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
     _env_bin, _config_path, _default_vault, _normalise_pasted,
     _detect_clipboard, _no_console, safe_entry_name, _ILLEGAL_CHARS,
+    _template_name, _DEFAULT_TEMPLATE,
 )
 
 
@@ -364,6 +365,74 @@ def test_typst_template_exists():
     # export time otherwise.
     assert (_TEMPLATES_DIR / "journal.typ").is_file()
     print("  Typst template present OK")
+
+
+def test_template_selection():
+    # The guarantee this whole feature rests on: a note that does not ask
+    # for a template renders through the one it always has. Existing
+    # devices must not change what they produce because new files landed
+    # in templates/.
+    assert _template_name({}) == _DEFAULT_TEMPLATE == "journal.typ"
+    assert _template_name({"style": "mla"}) == "journal.typ"
+    assert _template_name({"template": ""}) == "journal.typ"
+    assert _template_name({"template": None}) == "journal.typ"
+
+    # Opt-in names, including case and stray whitespace.
+    assert _template_name({"template": "mla"}) == "mla.typ"
+    assert _template_name({"template": "  MLA "}) == "mla.typ"
+    assert _template_name({"template": "turabian"}) == "turabian.typ"
+    assert _template_name({"template": "chicago"}) == "turabian.typ"
+
+    # A typo must not cost a student their export.
+    assert _template_name({"template": "mla-9"}) == "journal.typ"
+    print("  Template selection OK")
+
+
+def test_new_templates_exist():
+    # Selected by name at export time, so a rename or a missing file only
+    # surfaces when a student presses export.
+    for name in ("journal.typ", "mla.typ", "turabian.typ"):
+        assert (_TEMPLATES_DIR / name).is_file(), name
+    print("  Style-guide templates present OK")
+
+
+def test_new_templates_expose_conf():
+    # _typst_wrapper emits `#import "journal.typ": conf` against whichever
+    # file was copied in, so every template must expose conf() with the
+    # same parameters or the wrapper fails to compile.
+    required = ("title", "author", "course", "instructor", "date",
+                "style", "spacing", "lastname")
+    for name in ("mla.typ", "turabian.typ"):
+        src = (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
+        assert "#let conf(" in src, name
+        for param in required:
+            assert f"{param}:" in src, (name, param)
+    print("  Template conf() signatures OK")
+
+
+def test_mla_date_via_template_key():
+    # template: mla implies MLA date order, so a note need not also set
+    # style:. Notes without the key are untouched.
+    assert _format_export_date(
+        {"date": "2026-08-14", "template": "mla"}) == "14 August 2026"
+    assert _format_export_date(
+        {"date": "2026-08-14", "style": "mla"}) == "14 August 2026"
+    assert _format_export_date(
+        {"date": "2026-08-14"}) == "August 14, 2026"
+    assert _format_export_date(
+        {"date": "2026-08-14", "template": "turabian"}) == "August 14, 2026"
+    print("  MLA date via template key OK")
+
+
+def test_journal_template_untouched_by_new_ones():
+    # The docx-derived template is the reference the LibreOffice chain is
+    # compared against. If MLA fixes ever get applied to it by mistake,
+    # that comparison silently stops meaning anything -- so pin the two
+    # properties that make it docx-derived rather than style-guide-derived.
+    src = (_TEMPLATES_DIR / "journal.typ").read_text(encoding="utf-8")
+    assert "para-extra = 18pt" in src, "journal.typ lost its docx paragraph gap"
+    assert "first-line-indent" not in src, "journal.typ gained an MLA indent"
+    print("  journal.typ still docx-derived OK")
 
 
 def test_pdf_engine_routing():
@@ -1225,6 +1294,11 @@ if __name__ == "__main__":
     test_strip_frontmatter()
     test_initial_pdf_engine()
     test_bundled_bin()
+    test_template_selection()
+    test_new_templates_exist()
+    test_new_templates_expose_conf()
+    test_mla_date_via_template_key()
+    test_journal_template_untouched_by_new_ones()
     print("  \u2713 Typst export tests passed\n")
 
     print("Testing tool detection...")
