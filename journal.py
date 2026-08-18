@@ -5014,6 +5014,17 @@ def create_app(storage):
                 # chain simply prints the @key.
                 bib_src = (_resolve_bib_path(yaml, state.storage.vault_dir)
                            if "bibliography" in yaml else None)
+                # A note that asks for a bibliography and does not get
+                # one must not export anyway. Without --citeproc pandoc
+                # emits bare #cite() calls, Typst rejects them with "the
+                # document does not contain a bibliography", and that
+                # message names neither the missing file nor the reason
+                # -- after however long the export took to get there.
+                if "bibliography" in yaml and not bib_src:
+                    show_notification(
+                        state, "bibliography: not found — "
+                        + str(yaml.get("bibliography", ""))[-46:])
+                    return
 
                 csl_src = _resolve_csl_path(yaml, state.storage.vault_dir)
 
@@ -5122,6 +5133,15 @@ def create_app(storage):
                 pandoc, str(md_path), "--standalone",
                 f"--reference-doc={ref_doc}", f"--lua-filter={lua_path}",
             ]
+            if "bibliography" in yaml and not _resolve_bib_path(
+                    yaml, state.storage.vault_dir):
+                # Same reasoning as the Typst path; here the citation
+                # degrades to a literal [@key] in the finished document
+                # rather than failing, which is quieter and worse.
+                show_notification(
+                    state, "bibliography: not found — "
+                    + str(yaml.get("bibliography", ""))[-46:])
+                return
             if "bibliography" in yaml:
                 pandoc_args.append("--citeproc")
                 # Resolve bibliography: and csl: ourselves and pass them
