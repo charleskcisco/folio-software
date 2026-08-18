@@ -38,6 +38,11 @@
 #let box-top = 0.891em
 #let box-bottom = -0.216em
 #let leading-double = 1.193em
+
+// Baseline to baseline for double-spaced body text: the line box plus
+// its leading. Named because the heading spacing is expressed in whole
+// lines rather than in points.
+#let line-advance = 2.30em
 #let leading-single = 0.043em
 
 #let conf(
@@ -117,37 +122,40 @@
   // Operators the serif does not carry.
   show math.equation: set text(font: math-fonts)
 
-  // Turabian distinguishes its five heading levels by placement and
-  // weight, never by size -- all of them sit at body size:
+  // Headings follow the CMOS presentation the Purdue OWL sample paper
+  // demonstrates, not Turabian's prescribed five-level scheme.
   //
-  //   1  centred, bold
-  //   2  centred, regular
-  //   3  flush left, bold
-  //   4  flush left, regular
-  //   5  run in at the head of its own paragraph, bold, ending with a
-  //      period, with the text continuing on the same line
+  // That is a deliberate choice and a legitimate one: Chicago does not
+  // prescribe a heading format. It asks for a clear hierarchy applied
+  // consistently -- "Chicago allows you to devise your own format but
+  // prioritizes consistency" -- and leaves the rest to the writer.
+  // Turabian, the student adaptation, is where the centred levels 1 and
+  // 2 come from. A paper marked strictly against Turabian would expect
+  // those; a paper marked against Chicago will not.
   //
-  // The manual permits italic wherever bold is used at 1, 3 and 5; bold
-  // is chosen consistently here so the three read as one system.
+  //   1  flush left, bold
+  //   2  flush left, italic
+  //   3  flush left, regular
+  //   5  run in at the head of its paragraph, bold, ending in a period,
+  //      with the text continuing on the same line
   //
-  // Capitalisation is the writer's business, not the template's: levels
-  // 1 to 3 take headline style and 4 to 5 sentence style, and nothing
-  // here changes the case of what was typed.
+  // Sizes stay at body size throughout: the hierarchy is carried by
+  // placement and weight, which is what keeps it from reading as a
+  // magazine layout.
   show heading: set text(font: body-fonts, size: 12pt, weight: "regular")
-  show heading: set block(above: leading-double, below: leading-double)
-  show heading.where(level: 1): it => align(center)[#strong(it.body)]
-  show heading.where(level: 2): it => align(center)[#it.body]
-  // set, not a content rule: returning strong(it.body) yields inline
-  // content, which drops the heading's block and runs it into the
-  // paragraph beneath. That is what level 5 wants and what level 3 must
-  // not do.
-  show heading.where(level: 3): set text(weight: "bold")
 
-  // Level 5 is a paragraph opening rather than a line of its own, so it
-  // cannot use the block spacing above: the heading and the text that
-  // follows it are one paragraph. Typst has no way to pull the next
-  // block up, so the run-in is emitted as an inline box with no space
-  // after it and the following text flows on.
+  // An extra line space before a heading, per the same guidance. The
+  // body advances 2.30em baseline to baseline, so adding one to the
+  // usual block gap puts a full blank line above the heading and
+  // nothing extra below it.
+  show heading: set block(
+    above: leading-double + line-advance, below: leading-double)
+
+  // set rules, not content rules: returning styled content yields inline
+  // material, which drops the heading's block and runs it into the
+  // paragraph beneath. Level 5 is the one place that is wanted.
+  show heading.where(level: 1): set text(weight: "bold")
+  show heading.where(level: 2): set text(style: "italic")
   show heading.where(level: 5): it => box(strong[#it.body.])
 
   // Block quotations are indented and set single-spaced, which is one of

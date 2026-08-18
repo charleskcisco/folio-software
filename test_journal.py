@@ -816,25 +816,36 @@ def test_typst_writer_disables_native_citations():
 
 
 def test_turabian_heading_levels():
-    # Turabian separates its five levels by placement and weight, never
-    # by size, so every level must stay at body size.
+    # Headings follow the CMOS presentation the Purdue OWL sample paper
+    # shows -- flush left, bold then italic -- rather than Turabian's
+    # prescribed centred scheme. Chicago does not prescribe one; it asks
+    # for a consistent hierarchy. Nothing may be centred, and nothing may
+    # grow: the hierarchy is placement and weight, never size.
     src = (_TEMPLATES_DIR / "turabian.typ").read_text(encoding="utf-8")
-    for lvl in (1, 2, 3, 5):
-        assert f"heading.where(level: {lvl})" in src, lvl
-    assert "size: 20pt" not in src and "size: 16pt" not in src
+    body = "\n".join(l for l in src.splitlines()
+                     if not l.lstrip().startswith("//"))
+    heads = body[body.index("show heading"):body.index("show quote")]
+    assert "align(center)" not in heads, "a heading is centred again"
+    for bad in ("20pt", "16pt", "14pt"):
+        assert bad not in heads, bad
 
-    # Level 3 must be a `set` rule. Returning strong(it.body) yields
-    # inline content, which drops the heading's block and runs it into
-    # the paragraph below -- it rendered as "Level Three Flush Left Bold
-    # Body text under level three." on one line.
-    i = src.index("heading.where(level: 3)")
-    assert "set text(weight:" in src[i:i + 80], src[i:i + 80]
+    # Level 1 bold, level 2 italic, and both as set rules so they keep
+    # their own line -- a content rule yields inline material and runs
+    # the heading into the paragraph below.
+    for lvl, prop in ((1, 'weight: "bold"'), (2, 'style: "italic"')):
+        i = heads.index(f"heading.where(level: {lvl})")
+        seg = heads[i:i + 90]
+        assert "set text" in seg and prop in seg, (lvl, seg)
 
-    # Level 5 is the opposite: it *must* be inline, because the heading
+    # Level 5 is the exception: it must be inline, because the heading
     # and the sentence after it are one paragraph.
-    j = src.index("heading.where(level: 5)")
-    assert "box(" in src[j:j + 90], src[j:j + 90]
-    print("  Turabian heading levels OK")
+    j = heads.index("heading.where(level: 5)")
+    assert "box(" in heads[j:j + 90]
+
+    # An extra line space above, none below, per the same guidance.
+    i = heads.index("set block(")
+    assert "line-advance" in heads[i:i + 90], heads[i:i + 90]
+    print("  CMOS heading levels OK")
 
 
 def test_bundled_fonts_present_and_licensed():
