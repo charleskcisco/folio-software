@@ -1275,6 +1275,159 @@ def _default_csl_path(yaml: dict) -> Optional[Path]:
     return p if p.is_file() else None
 
 
+# Pandoc citation keys: begin with a letter, digit or underscore, then
+# alphanumerics and internal punctuation. Deliberately greedy -- an
+# over-matched key costs one unused entry in the filtered bibliography,
+# an under-matched one loses a citation.
+# citeproc parses the whole bibliography before rendering anything, and
+# a writerdeck is slow. Three times the plain budget when a note cites,
+# because the failure it prevents -- a timeout partway through -- costs
+# the export entirely.
+_PANDOC_TIMEOUT = 60
+
+_CITEKEY_RE = re.compile(r"@([A-Za-z0-9_][A-Za-z0-9_:.#$%&+?<>~/-]*)")
+
+# Blocks that carry no key of their own but that entries may depend on.
+_BIB_GLOBALS = ("string", "preamble")
+
+
+def _cited_keys(markdown: str) -> set:
+    """Citation keys referenced anywhere in a note."""
+    return {k.rstrip(".,;:") for k in _CITEKEY_RE.findall(markdown)}
+
+
+def _bib_blocks(text: str) -> list:
+    """Split a .bib into (kind, key, source) blocks.
+
+    kind is the entry type lowercased; key is None for @string and
+    @preamble. Brace matching rather than line matching: a BibTeX entry
+    spans as many lines as it likes, and splitting on lines beginning
+    with @ truncates any entry whose fields contain one.
+    """
+    blocks, i, n = [], 0, len(text)
+    while True:
+        at = text.find("@", i)
+        if at < 0:
+            break
+        m = re.match(r"@\s*([A-Za-z]+)\s*([{(])", text[at:])
+        if not m:
+            i = at + 1
+            continue
+        kind = m.group(1).lower()
+        # Match only the delimiter the entry actually opened with.
+        # BibTeX accepts @entry{...} or @entry(...), but once one is
+        # chosen the other is ordinary text -- and prose is full of
+        # unbalanced parentheses. Counting both made an abstract
+        # containing "(" without its ")" swallow the remaining 710KB of
+        # an 800-entry library as one entry.
+        #
+        # Quote-delimited values are left alone for the same reason:
+        # tracking them adds failure modes and the delimiters balance
+        # regardless.
+        opener = m.group(2)
+        closer = "}" if opener == "{" else ")"
+        depth, j = 0, at + m.end() - 1
+        while j < n:
+            c = text[j]
+            if c == "\\":
+                j += 2
+                continue
+            if c == opener:
+                depth += 1
+            elif c == closer:
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            j += 1
+        body = text[at:j]
+        key = None
+        if kind not in _BIB_GLOBALS:
+            km = re.match(r"@\s*[A-Za-z]+\s*[{(]\s*([^,\s}]+)", body)
+            key = km.group(1) if km else None
+        blocks.append((kind, key, body))
+        i = j
+    return blocks
+
+
+def _filter_bib(text: str, keys: set) -> Optional[str]:
+    """A .bib holding only the entries `keys` needs, or None to give up.
+
+    citeproc parses the whole bibliography into memory before it renders
+    anything, so an 800-entry library costs the same whether a note
+    cites four sources or four hundred. On a 512MB writerdeck that is
+    the difference between an export and an OOM kill.
+
+    Returns None -- meaning "use the original" -- if anything about the
+    parse looks unreliable: a key that was found in the full file but
+    not in the filtered one, or a file this scanner did not understand.
+    Silently dropping a source is far worse than the memory.
+    """
+    blocks = _bib_blocks(text)
+    if not blocks:
+        return None
+    by_key = {}
+    for kind, key, body in blocks:
+        if key:
+            by_key.setdefault(key, body)
+            by_key.setdefault(key.lower(), body)
+
+    # crossref and xdata name further entries, transitively.
+    wanted, queue = set(), [k for k in keys]
+    while queue:
+        k = queue.pop()
+        body = by_key.get(k) or by_key.get(k.lower())
+        if body is None or k in wanted:
+            continue
+        wanted.add(k)
+        for ref in re.findall(r"(?:crossref|xdata)\s*=\s*[{\"]([^}\"]+)",
+                              body, re.I):
+            queue.extend(r.strip() for r in ref.split(","))
+
+    if not wanted:
+        return None
+
+    out = []
+    for kind, key, body in blocks:
+        if kind in _BIB_GLOBALS or (key and (
+                key in wanted or key.lower() in {w.lower() for w in wanted})):
+            out.append(body)
+    result = "\n\n".join(out) + "\n"
+
+    # Safety net: every key that exists in the original must survive.
+    kept = {k for _, k, _ in _bib_blocks(result) if k}
+    for k in keys:
+        present = k in by_key or k.lower() in by_key
+        if present and k not in kept and k.lower() not in {x.lower() for x in kept}:
+            return None
+    return result
+
+
+def _narrow_bib(bib_src: Path, markdown: str, tmp_dir) -> Path:
+    """Path to a bibliography holding only what this note cites.
+
+    Falls back to the original on any doubt -- an unreadable file, a
+    parse that lost a key, or a filter that saved nothing worth the
+    risk.
+    """
+    try:
+        text = Path(bib_src).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return bib_src
+    keys = _cited_keys(markdown)
+    if not keys:
+        return bib_src
+    small = _filter_bib(text, keys)
+    if not small or len(small) >= len(text) * 0.9:
+        return bib_src
+    try:
+        dest = Path(tmp_dir) / "cited.bib"
+        dest.write_text(small, encoding="utf-8")
+        return dest
+    except OSError:
+        return bib_src
+
+
 def _resolve_csl_path(yaml: dict, vault_dir: Path) -> Optional[Path]:
     """Locate the .csl for this note, or None.
 
@@ -4604,6 +4757,24 @@ def create_app(storage):
             except ValueError:
                 return str(p)
 
+        def _describe_returncode(code):
+            """Say what a negative exit code means.
+
+            A killed process reports -N for signal N, with nothing on
+            stderr to explain itself. -9 is SIGKILL, and on a 512MB
+            writerdeck running pandoc against a large bibliography that
+            is almost always the OOM killer rather than anything wrong
+            with the note.
+            """
+            if code is None or code >= 0:
+                return str(code)
+            sig = -code
+            name = {9: "SIGKILL", 15: "SIGTERM", 6: "SIGABRT",
+                    11: "SIGSEGV"}.get(sig, f"signal {sig}")
+            hint = (" -- killed from outside the app, most often the "
+                    "system running out of memory" if sig == 9 else "")
+            return f"{code} ({name}){hint}"
+
         def _log_export_error(stage, cmd, result):
             # The on-screen notification is fleeting and truncated on a
             # writerdeck, so write the full command, exit code, and output
@@ -4625,7 +4796,7 @@ def create_app(storage):
                     f"format:  {export_format}\n"
                     f"note:    {safe_name}\n"
                     f"command:\n  {' '.join(str(c) for c in cmd)}\n"
-                    f"returncode: {result.returncode}\n"
+                    f"returncode: {_describe_returncode(result.returncode)}\n"
                     f"--- stdout ---\n{result.stdout or ''}\n"
                     f"--- stderr ---\n{result.stderr or ''}\n",
                     encoding="utf-8")
@@ -4699,7 +4870,8 @@ def create_app(storage):
                     # and notes here put citations inside footnotes
                     # already (^[Again, @key]). Footnotes do not nest, so
                     # the citation vanished and left an empty note.
-                    pandoc_args += ["--citeproc", f"--bibliography={bib_src}"]
+                    bib_use = _narrow_bib(bib_src, content, tmp_dir)
+                    pandoc_args += ["--citeproc", f"--bibliography={bib_use}"]
                     if csl_src:
                         pandoc_args.append(f"--csl={csl_src}")
                 else:
@@ -4709,12 +4881,15 @@ def create_app(storage):
                     state, "Exporting… (1/2) Running pandoc", duration=60)
                 result = await loop.run_in_executor(
                     None, lambda: subprocess.run(
-                        pandoc_args, capture_output=True, text=True, timeout=60))
+                        pandoc_args, capture_output=True, text=True,
+                        timeout=_PANDOC_TIMEOUT * (3 if bib_src else 1)))
                 if result.returncode != 0 or not body_path.exists():
                     err = (result.stderr or result.stdout or "").strip()
                     tail = err.splitlines()[-1][:70] if err else "no output file produced"
                     log = _log_export_error("pandoc", pandoc_args, result)
                     suffix = f" (see {log})" if log else ""
+                    if result.returncode == -9:
+                        tail = "pandoc was killed (out of memory?)"
                     show_notification(state, f"Export failed (pandoc): {tail}{suffix}")
                     return
 
@@ -4768,7 +4943,8 @@ def create_app(storage):
                 # outrank metadata, so this wins without touching the note.
                 bib_src = _resolve_bib_path(yaml, state.storage.vault_dir)
                 if bib_src:
-                    pandoc_args.append(f"--bibliography={bib_src}")
+                    pandoc_args.append(
+                        f"--bibliography={_narrow_bib(bib_src, content, tmp_dir)}")
                 csl_src = _resolve_csl_path(yaml, state.storage.vault_dir)
                 if csl_src:
                     pandoc_args.append(f"--csl={csl_src}")
@@ -4778,7 +4954,9 @@ def create_app(storage):
             show_notification(state, f"Exporting\u2026 ({steps}) Running pandoc", duration=60)
             result = await loop.run_in_executor(
                 None, lambda: subprocess.run(
-                    pandoc_args, capture_output=True, text=True, timeout=60))
+                    pandoc_args, capture_output=True, text=True,
+                    timeout=_PANDOC_TIMEOUT * (3 if "--citeproc" in pandoc_args
+                                               else 1)))
             # Trust the output file, not just the exit code: a tool can
             # exit 0 yet write nothing. Surface the real error so silent
             # failures on minimal devices become visible.

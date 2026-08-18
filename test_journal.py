@@ -29,6 +29,7 @@ from journal import (
     _detect_clipboard, _no_console, safe_entry_name, _ILLEGAL_CHARS,
     _template_name, _DEFAULT_TEMPLATE, _default_csl_path, _CSL_DIR,
     _column_widths, _cell_text_rows, _autofit_tables, _TEXT_WIDTH_TWIPS,
+    _bib_blocks, _filter_bib, _cited_keys, _narrow_bib,
 )
 
 
@@ -617,6 +618,101 @@ def test_cell_text_rows():
     # the column to a fragment.
     assert _cell_text_rows(tbl) == [["A B", "C"]]
     print("  Cell text extraction OK")
+
+
+BIB_SAMPLE = """@string{jbl = {Journal of Biblical Literature}}
+
+@article{alpha2020,
+  title = {A Title (with an unclosed paren},
+  abstract = {Prose (like this one has stray parens},
+  journal = jbl,
+}
+
+@book{beta2021,
+  title = {Another {{Braced}} Title},
+  note = {He said "quoted" here},
+}
+
+@incollection{gamma2022,
+  crossref = {beta2021},
+  title = {Depends on beta},
+}
+
+@book{delta2023,
+  title = {Unused},
+}
+"""
+
+
+def test_bib_blocks_survive_unbalanced_parens():
+    # The failure that made this necessary: a real 800-entry library has
+    # abstracts with "(" and no ")", and counting parens as delimiters
+    # made one entry swallow the remaining 710KB. BibTeX only treats
+    # parens as delimiters when the entry opened with one.
+    blocks = _bib_blocks(BIB_SAMPLE)
+    keys = [k for _, k, _ in blocks if k]
+    assert keys == ["alpha2020", "beta2021", "gamma2022", "delta2023"], keys
+    kinds = [kind for kind, _, _ in blocks]
+    assert kinds[0] == "string"
+    print("  Bib parsing survives unbalanced parens OK")
+
+
+def test_bib_blocks_paren_delimited_entry():
+    # The other delimiter still has to work.
+    blocks = _bib_blocks("@article(paren2020, title = {T})")
+    assert [k for _, k, _ in blocks] == ["paren2020"], blocks
+    print("  Paren-delimited entries OK")
+
+
+def test_filter_bib_keeps_what_is_cited():
+    out = _filter_bib(BIB_SAMPLE, {"alpha2020"})
+    assert out and "alpha2020" in out
+    assert "delta2023" not in out, "kept an uncited entry"
+    # @string macros must survive: an entry referencing one renders
+    # wrongly without it.
+    assert "@string" in out
+    print("  Filter keeps what is cited OK")
+
+
+def test_filter_bib_follows_crossref():
+    out = _filter_bib(BIB_SAMPLE, {"gamma2022"})
+    assert out and "gamma2022" in out
+    assert "beta2021" in out, "crossref target dropped"
+    print("  Filter follows crossref OK")
+
+
+def test_filter_bib_gives_up_rather_than_lose_a_source():
+    # Nothing recognisable: better to hand pandoc the original than to
+    # silently drop every citation.
+    assert _filter_bib("not a bibliography at all", {"x"}) is None
+    # A key that is not in the file at all cannot be satisfied by
+    # filtering, so there is nothing to gain and a fallback is right.
+    assert _filter_bib(BIB_SAMPLE, {"nosuchkey"}) is None
+    print("  Filter gives up rather than lose a source OK")
+
+
+def test_narrow_bib_falls_back_when_unhelpful():
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        bib = d / "refs.bib"
+        bib.write_text(BIB_SAMPLE, encoding="utf-8")
+        # A note citing nothing keeps the original path.
+        assert _narrow_bib(bib, "no citations here", d) == bib
+        # A note citing something gets a smaller file.
+        out = _narrow_bib(bib, "text [@alpha2020]", d)
+        assert out != bib and out.exists()
+        assert len(out.read_text(encoding="utf-8")) < len(BIB_SAMPLE)
+        # A missing file is not fatal.
+        assert _narrow_bib(d / "gone.bib", "[@alpha2020]", d) == d / "gone.bib"
+    print("  Narrow-bib fallbacks OK")
+
+
+def test_cited_keys_extraction():
+    keys = _cited_keys("See [@a2020; @b2021] and @c2022 plus [-@d2023].")
+    assert {"a2020", "b2021", "c2022", "d2023"} <= keys, keys
+    # Trailing punctuation is not part of a key.
+    assert "e2024" in _cited_keys("as noted by @e2024.")
+    print("  Citekey extraction OK")
 
 
 def test_pdf_engine_routing():
@@ -1489,6 +1585,13 @@ if __name__ == "__main__":
     test_column_widths_edge_cases()
     test_autofit_rewrites_table_widths()
     test_cell_text_rows()
+    test_bib_blocks_survive_unbalanced_parens()
+    test_bib_blocks_paren_delimited_entry()
+    test_filter_bib_keeps_what_is_cited()
+    test_filter_bib_follows_crossref()
+    test_filter_bib_gives_up_rather_than_lose_a_source()
+    test_narrow_bib_falls_back_when_unhelpful()
+    test_cited_keys_extraction()
     test_journal_template_untouched_by_new_ones()
     test_line_box_pinned_explicitly()
     test_first_line_indent_matches_reference_docx()
