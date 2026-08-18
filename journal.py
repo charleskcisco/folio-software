@@ -1028,11 +1028,7 @@ def _format_export_date(yaml: dict) -> str:
     if not 1 <= month <= 12:
         return raw
     name = _MONTH_NAMES[month - 1]
-    # template: mla counts as MLA too. Existing notes carry no template:
-    # key, so this cannot change what any of them already render.
-    mla = (yaml.get("style", "") == "mla"
-           or str(yaml.get("template", "")).strip().lower() == "mla")
-    if mla:
+    if str(yaml.get("style", "")).strip().lower() == "mla":
         return f"{day} {name} {year}"
     return f"{name} {day}, {year}"
 
@@ -1042,17 +1038,24 @@ def _typst_str(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-# Templates a note may opt into by name. The default is deliberately the
-# empty string -> journal.typ: that template is transcribed from
-# refs/*.docx so the Typst and LibreOffice engines stay comparable, and a
-# device happily exporting through it must not change what it produces
-# because new files appeared in templates/. These are additions, not
-# replacements.
+# Which .typ template renders which style. style: is the one key -- the
+# same key the docx path reads -- so a note declares its style once and
+# both engines honour it as far as each can.
+#
+# A note with no style: (or no frontmatter at all) gets journal.typ,
+# which is Turabian without the cover page: centred title, author and
+# date over a double-spaced body. That template is transcribed from
+# refs/*.docx and matches the LibreOffice render exactly, so an unstyled
+# note is the one case where the two engines still agree line for line.
+#
+# mla and chicago route to templates written to the style guides
+# instead, which the docx chain cannot reproduce -- those notes are
+# deliberately no longer at parity.
 _DEFAULT_TEMPLATE = "journal.typ"
 _TEMPLATES = {
     "mla": "mla.typ",
-    "turabian": "turabian.typ",
     "chicago": "turabian.typ",
+    "turabian": "turabian.typ",
 }
 
 
@@ -1060,9 +1063,9 @@ def _template_name(yaml: dict) -> str:
     """Filename of the .typ template that renders this note.
 
     Anything unrecognised falls back to the default rather than failing:
-    a typo in template: should not cost a student their export.
+    a typo in style: should not cost a student their export.
     """
-    key = str(yaml.get("template", "") or "").strip().lower()
+    key = str(yaml.get("style", "") or "").strip().lower()
     return _TEMPLATES.get(key, _DEFAULT_TEMPLATE)
 
 

@@ -368,23 +368,25 @@ def test_typst_template_exists():
 
 
 def test_template_selection():
-    # The guarantee this whole feature rests on: a note that does not ask
-    # for a template renders through the one it always has. Existing
-    # devices must not change what they produce because new files landed
-    # in templates/.
+    # style: is the single key. No style -- or no frontmatter at all --
+    # is journal.typ, the docx-derived template, which is Turabian minus
+    # the cover page.
     assert _template_name({}) == _DEFAULT_TEMPLATE == "journal.typ"
-    assert _template_name({"style": "mla"}) == "journal.typ"
-    assert _template_name({"template": ""}) == "journal.typ"
-    assert _template_name({"template": None}) == "journal.typ"
+    assert _template_name({"style": ""}) == "journal.typ"
+    assert _template_name({"style": None}) == "journal.typ"
+    assert _template_name({"title": "no style key"}) == "journal.typ"
 
-    # Opt-in names, including case and stray whitespace.
-    assert _template_name({"template": "mla"}) == "mla.typ"
-    assert _template_name({"template": "  MLA "}) == "mla.typ"
-    assert _template_name({"template": "turabian"}) == "turabian.typ"
-    assert _template_name({"template": "chicago"}) == "turabian.typ"
+    # The two style-guide templates, tolerant of case and whitespace.
+    assert _template_name({"style": "mla"}) == "mla.typ"
+    assert _template_name({"style": "  MLA "}) == "mla.typ"
+    assert _template_name({"style": "chicago"}) == "turabian.typ"
+    assert _template_name({"style": "turabian"}) == "turabian.typ"
 
     # A typo must not cost a student their export.
-    assert _template_name({"template": "mla-9"}) == "journal.typ"
+    assert _template_name({"style": "mla-9"}) == "journal.typ"
+
+    # template: was the old key and is gone; it must not still work.
+    assert _template_name({"template": "mla"}) == "journal.typ"
     print("  Template selection OK")
 
 
@@ -410,18 +412,18 @@ def test_new_templates_expose_conf():
     print("  Template conf() signatures OK")
 
 
-def test_mla_date_via_template_key():
-    # template: mla implies MLA date order, so a note need not also set
-    # style:. Notes without the key are untouched.
-    assert _format_export_date(
-        {"date": "2026-08-14", "template": "mla"}) == "14 August 2026"
+def test_mla_date_keys_off_style():
+    # MLA writes the day first. Everything else, including no style at
+    # all, gets the month-first form.
     assert _format_export_date(
         {"date": "2026-08-14", "style": "mla"}) == "14 August 2026"
+    assert _format_export_date({"date": "2026-08-14"}) == "August 14, 2026"
     assert _format_export_date(
-        {"date": "2026-08-14"}) == "August 14, 2026"
+        {"date": "2026-08-14", "style": "chicago"}) == "August 14, 2026"
+    # The retired key must not smuggle MLA formatting back in.
     assert _format_export_date(
-        {"date": "2026-08-14", "template": "turabian"}) == "August 14, 2026"
-    print("  MLA date via template key OK")
+        {"date": "2026-08-14", "template": "mla"}) == "August 14, 2026"
+    print("  MLA date keys off style OK")
 
 
 def test_journal_template_untouched_by_new_ones():
@@ -1360,7 +1362,7 @@ if __name__ == "__main__":
     test_template_selection()
     test_new_templates_exist()
     test_new_templates_expose_conf()
-    test_mla_date_via_template_key()
+    test_mla_date_keys_off_style()
     test_journal_template_untouched_by_new_ones()
     test_line_box_pinned_explicitly()
     test_first_line_indent_matches_reference_docx()
