@@ -877,6 +877,39 @@ def test_templates_name_the_bundled_face_first():
     print("  Templates prefer the bundled face OK")
 
 
+def test_rts_is_bound_before_it_is_read():
+    # An export *without* a bibliography died on "cannot access local
+    # variable 'rts'": it was bound only inside the citing branch and
+    # read unconditionally after it, so the common case -- a note with no
+    # citations -- raised every time.
+    #
+    # This is a narrow guard for one variable, and deliberately so. Two
+    # broader approaches were tried and dropped: pyflakes does not detect
+    # conditional binding at all, and a hand-written AST pass produced
+    # false positives on every if/else nested inside a loop, because
+    # deciding what is "read afterwards" needs real control-flow
+    # analysis rather than line numbers.
+    #
+    # The honest gap is that the export coroutine lives inside
+    # create_app and no test can run it. Until that changes, bugs on
+    # that path are found by exporting, not by this file.
+    import ast
+    src = (Path(__file__).parent / "journal.py").read_text(encoding="utf-8")
+    for fn in ast.walk(ast.parse(src)):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        binds, reads = [], []
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Name) and node.id == "rts":
+                (binds if isinstance(node.ctx, ast.Store) else reads).append(
+                    node.lineno)
+        if not reads:
+            continue
+        assert binds and min(binds) < min(reads), (
+            "rts is read at line %d before any binding" % min(reads))
+    print("  rts bound before read OK")
+
+
 def test_pdf_engine_routing():
     saved = os.environ.pop("JOURNAL_PDF_ENGINE", None)
     try:
@@ -1757,6 +1790,7 @@ if __name__ == "__main__":
     test_rts_rejection_detected()
     test_rts_flags_are_removable()
     test_cite_timeout_is_larger()
+    test_rts_is_bound_before_it_is_read()
     test_typst_writer_disables_native_citations()
     test_turabian_heading_levels()
     test_bundled_fonts_present_and_licensed()

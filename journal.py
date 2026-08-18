@@ -5068,6 +5068,11 @@ def create_app(storage):
                        if bib_src else ""),
                     duration=_PROGRESS_SHOWN)
                 pandoc_args = [pandoc, str(body_md)]
+                # Assigned before the branch, not inside it. The retry
+                # below reads this unconditionally, so leaving it to the
+                # citing arm made every export *without* a bibliography
+                # die on an unbound local -- which is most of them.
+                rts = []
                 if bib_src:
                     # citeproc renders the citations and the reference
                     # list, exactly as it does for docx. Typst's own
