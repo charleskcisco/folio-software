@@ -1506,38 +1506,25 @@ def _strip_bib_noise(text: str) -> tuple:
     return "".join(out), removed
 
 
-_RTS_SUPPORT = {}
+# GHC runtime flags that buy peak memory with time. pandoc's default
+# copying collector wants roughly twice the live heap; rendering a
+# 2800-word note with citations peaked at 172MB on a 512MB writerdeck and
+# was killed, while the same command under these flags completed. -c
+# selects the compacting collector, -A1m shrinks the allocation area,
+# -F1.1 stops the heap growing speculatively.
+#
+# Not every build enables -rtsopts, and one that does not *fails* when
+# handed +RTS rather than ignoring it. Rather than probe -- which costs a
+# whole pandoc start-up, seconds on the hardware that needs this most --
+# the export runs with them and retries without if pandoc objects. The
+# rejection is immediate, so the retry is close to free, and the common
+# case pays nothing at all.
+_PANDOC_RTS = ("+RTS", "-c", "-A1m", "-F1.1", "-RTS")
 
 
-def _pandoc_rts_args(pandoc: str) -> list:
-    """GHC runtime flags that buy peak memory with time, when available.
-
-    pandoc's default copying collector wants roughly twice the live heap.
-    On a 512MB writerdeck that is the whole ballgame: rendering a
-    2800-word note with citations peaked at 172MB and was killed by the
-    OOM killer, and the same command with these flags completed. -c
-    selects the compacting collector, -A1m shrinks the allocation area
-    and -F1.1 stops the heap growing speculatively.
-
-    They are not free -- many more, more expensive collections -- so they
-    are used only where the memory is actually tight, which is the
-    citeproc path.
-
-    Not every build enables -rtsopts, and a build without it *fails* when
-    handed +RTS rather than ignoring it, so support is probed once per
-    process and cached.
-    """
-    if pandoc not in _RTS_SUPPORT:
-        try:
-            probe = subprocess.run(
-                [pandoc, "+RTS", "-c", "-RTS", "--version"],
-                capture_output=True, timeout=20, **_no_console())
-            ok = probe.returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            ok = False
-        _RTS_SUPPORT[pandoc] = (
-            ["+RTS", "-c", "-A1m", "-F1.1", "-RTS"] if ok else [])
-    return _RTS_SUPPORT[pandoc]
+def _rts_rejected(result) -> bool:
+    """True if pandoc refused the runtime flags rather than the work."""
+    return result.returncode != 0 and "RTS" in (result.stderr or "")
 
 
 def _bib_openers(text: str) -> list:
@@ -5027,6 +5014,16 @@ def create_app(storage):
                         _strip_frontmatter(content), encoding="utf-8"))
 
                 body_path = Path(tmp_dir) / "body.typ"
+                # Announced before the preparation, not after it. Reading
+                # and filtering an 800-entry library takes a second on a
+                # writerdeck, and a UI that goes quiet first looks frozen
+                # rather than busy.
+                show_notification(
+                    state,
+                    "Exporting… (1/2) Running pandoc"
+                    + (" — bibliography, this can take a few minutes"
+                       if bib_src else ""),
+                    duration=60)
                 pandoc_args = [pandoc, str(body_md)]
                 if bib_src:
                     # citeproc renders the citations and the reference
@@ -5036,28 +5033,29 @@ def create_app(storage):
                     # and notes here put citations inside footnotes
                     # already (^[Again, @key]). Footnotes do not nest, so
                     # the citation vanished and left an empty note.
-                    bib_use = _narrow_bib(bib_src, content, tmp_dir)
-                    pandoc_args[1:1] = _pandoc_rts_args(pandoc)
+                    bib_use = await loop.run_in_executor(
+                        None, lambda: _narrow_bib(bib_src, content, tmp_dir))
+                    rts = list(_PANDOC_RTS)
+                    pandoc_args[1:1] = rts
                     pandoc_args += ["--citeproc", f"--bibliography={bib_use}"]
                     if csl_src:
                         pandoc_args.append(f"--csl={csl_src}")
                 else:
                     pandoc_args += ["--from", "markdown-citations"]
                 pandoc_args += ["--to", "typst", "-o", str(body_path)]
-                # A citing note runs pandoc under the memory-saving GC
-                # flags, which are several times slower. Saying so beats
-                # a progress message that looks stuck for minutes.
-                show_notification(
-                    state,
-                    "Exporting… (1/2) Running pandoc"
-                    + (" — bibliography, this can take a few minutes"
-                       if bib_src else ""),
-                    duration=60)
                 result = await loop.run_in_executor(
                     None, lambda: subprocess.run(
                         pandoc_args, capture_output=True, text=True,
                         timeout=(_PANDOC_CITE_TIMEOUT if bib_src
                                  else _PANDOC_TIMEOUT)))
+                if rts and _rts_rejected(result):
+                    for f in rts:
+                        pandoc_args.remove(f)
+                    result = await loop.run_in_executor(
+                        None, lambda: subprocess.run(
+                            pandoc_args, capture_output=True, text=True,
+                            timeout=(_PANDOC_CITE_TIMEOUT if bib_src
+                                     else _PANDOC_TIMEOUT)))
                 if result.returncode != 0 or not body_path.exists():
                     err = (result.stderr or result.stdout or "").strip()
                     tail = err.splitlines()[-1][:70] if err else "no output file produced"
@@ -5118,26 +5116,30 @@ def create_app(storage):
                 # outrank metadata, so this wins without touching the note.
                 bib_src = _resolve_bib_path(yaml, state.storage.vault_dir)
                 if bib_src:
-                    pandoc_args[1:1] = _pandoc_rts_args(pandoc)
-                    pandoc_args.append(
-                        f"--bibliography={_narrow_bib(bib_src, content, tmp_dir)}")
+                    rts = list(_PANDOC_RTS)
+                    pandoc_args[1:1] = rts
+                    bib_use = await loop.run_in_executor(
+                        None, lambda: _narrow_bib(bib_src, content, tmp_dir))
+                    pandoc_args.append(f"--bibliography={bib_use}")
                 csl_src = _resolve_csl_path(yaml, state.storage.vault_dir)
                 if csl_src:
                     pandoc_args.append(f"--csl={csl_src}")
             pandoc_args.extend(["-o", str(docx_path)])
 
             steps = "1/3" if export_format == "pdf" else "1/2"
-            slow = " — bibliography, this can take a few minutes" if (
-                "--citeproc" in pandoc_args) else ""
-            show_notification(
-                state, f"Exporting\u2026 ({steps}) Running pandoc{slow}",
-                duration=60)
+            cite = "--citeproc" in pandoc_args
+            tmo = _PANDOC_CITE_TIMEOUT if cite else _PANDOC_TIMEOUT
             result = await loop.run_in_executor(
                 None, lambda: subprocess.run(
-                    pandoc_args, capture_output=True, text=True,
-                    timeout=(_PANDOC_CITE_TIMEOUT
-                             if "--citeproc" in pandoc_args
-                             else _PANDOC_TIMEOUT)))
+                    pandoc_args, capture_output=True, text=True, timeout=tmo))
+            if cite and _rts_rejected(result):
+                for f in _PANDOC_RTS:
+                    if f in pandoc_args:
+                        pandoc_args.remove(f)
+                result = await loop.run_in_executor(
+                    None, lambda: subprocess.run(
+                        pandoc_args, capture_output=True, text=True,
+                        timeout=tmo))
             # Trust the output file, not just the exit code: a tool can
             # exit 0 yet write nothing. Surface the real error so silent
             # failures on minimal devices become visible.

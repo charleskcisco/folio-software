@@ -30,7 +30,7 @@ from journal import (
     _template_name, _DEFAULT_TEMPLATE, _default_csl_path, _CSL_DIR,
     _column_widths, _cell_text_rows, _autofit_tables, _TEXT_WIDTH_TWIPS,
     _bib_blocks, _filter_bib, _cited_keys, _narrow_bib,
-    _pandoc_rts_args, _PANDOC_TIMEOUT, _PANDOC_CITE_TIMEOUT,
+    _PANDOC_RTS, _rts_rejected, _PANDOC_TIMEOUT, _PANDOC_CITE_TIMEOUT,
     _strip_bib_noise, _bib_value_end, _bib_openers,
 )
 
@@ -717,20 +717,31 @@ def test_cited_keys_extraction():
     print("  Citekey extraction OK")
 
 
-def test_pandoc_rts_args_probe():
-    # A build without -rtsopts *fails* when handed +RTS rather than
-    # ignoring it, so an unprobed flag would break every citing export
-    # on such a machine. No pandoc at all must yield no flags, not a
-    # crash.
-    assert _pandoc_rts_args("/nonexistent/pandoc") == []
+def test_rts_rejection_detected():
+    # A pandoc built without -rtsopts fails when handed +RTS rather than
+    # ignoring it, so the export retries without the flags. Recognising
+    # that specific failure is what makes the retry safe: a real error
+    # must not be mistaken for it and silently retried.
+    class R:
+        def __init__(self, rc, err): self.returncode, self.stderr = rc, err
 
-    real = detect_pandoc()
-    if real:
-        args = _pandoc_rts_args(real)
-        assert args == [] or (args[0] == "+RTS" and args[-1] == "-RTS"), args
-        # Probing twice must not shell out twice.
-        assert _pandoc_rts_args(real) is _pandoc_rts_args(real)
-    print("  pandoc RTS probe OK")
+    assert _rts_rejected(R(1, "pandoc: Most RTS options are disabled."))
+    assert not _rts_rejected(R(0, ""))
+    assert not _rts_rejected(R(1, "pandoc: source.md: does not exist"))
+    assert not _rts_rejected(R(1, None))
+    print("  RTS rejection detection OK")
+
+
+def test_rts_flags_are_removable():
+    # The retry strips the flags from the built argument list, so every
+    # one of them must be an exact element rather than a fused token.
+    args = ["pandoc", "body.md"]
+    args[1:1] = list(_PANDOC_RTS)
+    for f in _PANDOC_RTS:
+        args.remove(f)
+    assert args == ["pandoc", "body.md"], args
+    assert _PANDOC_RTS[0] == "+RTS" and _PANDOC_RTS[-1] == "-RTS"
+    print("  RTS flags removable OK")
 
 
 def test_cite_timeout_is_larger():
@@ -1668,7 +1679,8 @@ if __name__ == "__main__":
     test_filter_bib_gives_up_rather_than_lose_a_source()
     test_narrow_bib_falls_back_when_unhelpful()
     test_cited_keys_extraction()
-    test_pandoc_rts_args_probe()
+    test_rts_rejection_detected()
+    test_rts_flags_are_removable()
     test_cite_timeout_is_larger()
     test_strip_bib_noise_removes_only_noise()
     test_strip_bib_noise_leaves_unterminated_fields_alone()
