@@ -927,7 +927,7 @@ def test_wrap_bibliography():
     assert "Body text." in out and "## Bibliography" in out
     # The heading itself stays outside the fence -- it is styled by the
     # heading rule, not the entry rule.
-    assert out.index("## Bibliography") < out.index("::: {#bibentries}")
+    assert out.index("## Bibliography") < out.index("#bibentries")
 
     for title in ("# Works Cited", "### references", "## REFERENCES"):
         assert "#bibentries" in _wrap_bibliography(
