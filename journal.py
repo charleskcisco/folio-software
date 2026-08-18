@@ -1298,6 +1298,15 @@ _PANDOC_CITE_TIMEOUT = 600
 # not just the pathological ones.
 _PROGRESS_SHOWN = 900
 
+# The renderer runs immediately after pandoc, so on a citing export it
+# starts on a machine that has just spent minutes thrashing swap. 120s is
+# a fair budget for a healthy system and a poor one here: typst took 45s
+# of it on a note that had just put the deck through four minutes of
+# pandoc, and a longer note would not have made it. The cap is meant to
+# catch a hang, not to punish a document for being long.
+_RENDER_TIMEOUT = 120
+_RENDER_CITE_TIMEOUT = 600
+
 _CITEKEY_RE = re.compile(r"@([A-Za-z0-9_][A-Za-z0-9_:.#$%&+?<>~/-]*)")
 
 # Blocks that carry no key of their own but that entries may depend on.
@@ -5129,7 +5138,9 @@ def create_app(storage):
                     state, "Exporting… (2/2) Rendering PDF", duration=_PROGRESS_SHOWN)
                 result = await loop.run_in_executor(
                     None, lambda: subprocess.run(
-                        typst_args, capture_output=True, text=True, timeout=120))
+                        typst_args, capture_output=True, text=True,
+                        timeout=(_RENDER_CITE_TIMEOUT if bib_src
+                                 else _RENDER_TIMEOUT)))
                 if result.returncode != 0 or not pdf_path.exists():
                     err = (result.stderr or result.stdout or "").strip()
                     tail = (err.splitlines()[-1][:70] if err
@@ -5235,7 +5246,9 @@ def create_app(storage):
             ]
             result = await loop.run_in_executor(
                 None, lambda: subprocess.run(
-                    lo_args, capture_output=True, text=True, timeout=120))
+                    lo_args, capture_output=True, text=True,
+                    timeout=(_RENDER_CITE_TIMEOUT if "bibliography" in yaml
+                             else _RENDER_TIMEOUT)))
             if result.returncode != 0 or not pdf_path.exists():
                 err = (result.stderr or result.stdout or "").strip()
                 tail = (err.splitlines()[-1][:70] if err
