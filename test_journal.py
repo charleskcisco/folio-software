@@ -31,6 +31,7 @@ from journal import (
     _column_widths, _cell_text_rows, _autofit_tables, _TEXT_WIDTH_TWIPS,
     _bib_blocks, _filter_bib, _cited_keys, _narrow_bib,
     _pandoc_rts_args, _PANDOC_TIMEOUT, _PANDOC_CITE_TIMEOUT,
+    _strip_bib_noise, _bib_value_end, _bib_openers,
 )
 
 
@@ -737,6 +738,57 @@ def test_cite_timeout_is_larger():
     # slow. A citing export must not be capped at the plain budget.
     assert _PANDOC_CITE_TIMEOUT > _PANDOC_TIMEOUT * 5
     print("  Citeproc timeout headroom OK")
+
+
+def test_strip_bib_noise_removes_only_noise():
+    src = """@article{a2020,
+  title = {Kept},
+  abstract = {Dropped, with {nested} braces and a stray ( paren},
+  shorttitle = {Kept Too},
+  file = {/path/with:colons/x.pdf},
+  keywords = {one, two},
+  year = {2020},
+}
+"""
+    out, n = _strip_bib_noise(src)
+    assert n == 3, n
+    for gone in ("abstract", "file =", "keywords"):
+        assert gone not in out, gone
+    # shorttitle is what Chicago's shortened notes render; losing it
+    # silently changes every repeat citation.
+    for kept in ("title", "shorttitle", "Kept Too", "year", "a2020"):
+        assert kept in out, kept
+    # Still parses as one entry afterwards.
+    assert [k for _, k, _ in _bib_blocks(out) if k] == ["a2020"]
+    print("  Bib noise stripping OK")
+
+
+def test_strip_bib_noise_leaves_unterminated_fields_alone():
+    # A value that never closes cannot be removed safely; truncating the
+    # file is worse than leaving one abstract in place.
+    src = "@article{a, abstract = {never closes and never will\n"
+    out, n = _strip_bib_noise(src)
+    assert n == 0, n
+    assert out == src, "input was modified despite the field being unusable"
+    print("  Unterminated field left alone OK")
+
+
+def test_bib_value_end_forms():
+    assert _bib_value_end("{abc}", 0) == 5          # braced
+    assert _bib_value_end('"abc"', 0) == 5          # quoted
+    assert _bib_value_end("abc,", 0) == 3           # bare
+    assert _bib_value_end("{a{b}c}", 0) == 7        # nested
+    assert _bib_value_end("{unclosed", 0) is None
+    print("  Bib value delimiters OK")
+
+
+def test_bib_openers_is_independent_of_block_parsing():
+    # This scan exists to check _bib_blocks' work, so it must not share
+    # its brace matching -- including on the unbalanced-paren case that
+    # broke that parser.
+    src = "@book{x, title = {A ( paren}}\n@book{y, title = {B}}\n"
+    assert _bib_openers(src) == ["x", "y"]
+    print("  Independent opener scan OK")
 
 
 def test_pdf_engine_routing():
@@ -1618,6 +1670,10 @@ if __name__ == "__main__":
     test_cited_keys_extraction()
     test_pandoc_rts_args_probe()
     test_cite_timeout_is_larger()
+    test_strip_bib_noise_removes_only_noise()
+    test_strip_bib_noise_leaves_unterminated_fields_alone()
+    test_bib_value_end_forms()
+    test_bib_openers_is_independent_of_block_parsing()
     test_journal_template_untouched_by_new_ones()
     test_line_box_pinned_explicitly()
     test_first_line_indent_matches_reference_docx()

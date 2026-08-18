@@ -1408,6 +1408,104 @@ def _filter_bib(text: str, keys: set) -> Optional[str]:
     return result
 
 
+# Fields no citation style renders, and the bulk of a Zotero export by
+# volume: scraped abstracts, local file paths, keyword dumps. In this
+# library they account for over a thousand fields across 800 entries.
+#
+# Dropping them does not save memory -- measured at 0MB, since entry
+# filtering has already cut the file to a few KB -- but it halves the
+# time citeproc spends parsing what is left, and on a writerdeck that is
+# the part a person waits through.
+#
+# Deliberately excludes shorttitle, which Chicago's shortened notes
+# render, and annotation, which an annotated-bibliography style renders.
+# The set is chosen to be safe under any CSL, not just the ones used here.
+_BIB_NOISE_FIELDS = ("abstract", "file", "keywords")
+_BIB_NOISE_RE = re.compile(
+    r"(?P<lead>[,{]\s*)(?:" + "|".join(_BIB_NOISE_FIELDS) + r")\s*=\s*",
+    re.IGNORECASE)
+
+
+def _bib_value_end(text: str, i: int) -> Optional[int]:
+    """Index just past the BibTeX field value starting at i, or None.
+
+    Handles brace-delimited, quote-delimited, and bare values, treating a
+    backslash as escaping the next character -- which is exactly what the
+    pathological abstracts need, since they are full of \\$ and \\{.
+    Returns None for an unterminated value so the caller can leave the
+    field alone rather than truncate the file.
+    """
+    n = len(text)
+    if i >= n:
+        return None
+    if text[i] == "{":
+        depth = 0
+        while i < n:
+            c = text[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+            i += 1
+        return None
+    if text[i] == '"':
+        i += 1
+        while i < n:
+            if text[i] == "\\":
+                i += 2
+                continue
+            if text[i] == '"':
+                return i + 1
+            i += 1
+        return None
+    while i < n and text[i] not in ",}":
+        i += 1
+    return i
+
+
+def _strip_bib_noise(text: str) -> tuple:
+    """Remove non-rendering fields from BibTeX source.
+
+    Returns (cleaned_text, fields_removed). A field whose value cannot be
+    terminated is skipped rather than removed, so malformed input is
+    passed through unchanged instead of being corrupted further.
+    """
+    out = []
+    pos = removed = 0
+    while True:
+        m = _BIB_NOISE_RE.search(text, pos)
+        if not m:
+            out.append(text[pos:])
+            break
+        end = _bib_value_end(text, m.end())
+        if end is None:
+            out.append(text[pos:m.end()])
+            pos = m.end()
+            continue
+        out.append(text[pos:m.start()])
+        # Take the *leading* separator with the field and leave the
+        # trailing one in place. Eating the trailing comma instead would
+        # strip the separator the next field needs to be recognised, so a
+        # run of noise fields -- abstract, file, keywords back to back, as
+        # Zotero writes them -- would only be stripped alternately.
+        if m.group("lead")[0] == "{":
+            # Field is first in the entry: keep the brace, and here the
+            # trailing separator is the redundant one.
+            out.append("{")
+            while end < len(text) and text[end] in " \t":
+                end += 1
+            if end < len(text) and text[end] == ",":
+                end += 1
+        pos = end
+        removed += 1
+    return "".join(out), removed
+
+
 _RTS_SUPPORT = {}
 
 
@@ -1442,6 +1540,16 @@ def _pandoc_rts_args(pandoc: str) -> list:
     return _RTS_SUPPORT[pandoc]
 
 
+def _bib_openers(text: str) -> list:
+    """Every entry key in a .bib, by flat scan.
+
+    Independent of _bib_blocks' brace matching on purpose: it exists to
+    check that pass's work, and a check sharing the bug it looks for is
+    no check at all.
+    """
+    return re.findall(r"@\s*[A-Za-z]+\s*[{(]\s*([^,\s}]+)", text)
+
+
 def _narrow_bib(bib_src: Path, markdown: str, tmp_dir) -> Path:
     """Path to a bibliography holding only what this note cites.
 
@@ -1457,7 +1565,26 @@ def _narrow_bib(bib_src: Path, markdown: str, tmp_dir) -> Path:
     if not keys:
         return bib_src
     small = _filter_bib(text, keys)
-    if not small or len(small) >= len(text) * 0.9:
+    if small:
+        # Strip after filtering rather than before: a handful of entries
+        # to scan instead of eight hundred.
+        small, _ = _strip_bib_noise(small)
+    else:
+        # The filter gave up, so the whole library is about to reach
+        # pandoc -- which is exactly when memory is tightest. Stripping
+        # is still worth doing there (129MB -> 117MB, a quarter off the
+        # parse) and is a separate, simpler pass: it removes named
+        # fields and never reorders or drops an entry.
+        #
+        # Verified rather than assumed. Every entry opener present
+        # before must be present after, checked with a scan that does
+        # not rely on the brace matching _filter_bib uses -- otherwise a
+        # parser bug would validate its own damage.
+        stripped, removed = _strip_bib_noise(text)
+        if not removed or _bib_openers(stripped) != _bib_openers(text):
+            return bib_src
+        small = stripped
+    if len(small) >= len(text) * 0.9:
         return bib_src
     try:
         dest = Path(tmp_dir) / "cited.bib"
