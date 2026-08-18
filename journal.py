@@ -1510,8 +1510,22 @@ def _strip_bib_noise(text: str) -> tuple:
 # copying collector wants roughly twice the live heap; rendering a
 # 2800-word note with citations peaked at 172MB on a 512MB writerdeck and
 # was killed, while the same command under these flags completed. -c
-# selects the compacting collector, -A1m shrinks the allocation area,
-# -F1.1 stops the heap growing speculatively.
+# selects the compacting collector, -A2m shrinks the allocation area,
+# -F1.3 limits speculative heap growth.
+#
+# Tuned rather than guessed, three runs each on the note that failed:
+#
+#     default          126 MB  0.11s
+#     -c               123 MB  0.13s
+#     -c -A4m          120 MB  0.15s
+#     -c -A2m -F1.3    114 MB  0.28s   <- here
+#     -c -A1m -F1.1    113 MB  0.53s
+#
+# The last row was shipped first and is a bad trade: one further
+# megabyte for twice the runtime. On a writerdeck that time is spent
+# thrashing zram, which makes the whole machine crawl -- keystrokes
+# included -- so the aggressive setting bought survival by taking the
+# device away for the duration.
 #
 # Not every build enables -rtsopts, and one that does not *fails* when
 # handed +RTS rather than ignoring it. Rather than probe -- which costs a
@@ -1519,7 +1533,7 @@ def _strip_bib_noise(text: str) -> tuple:
 # the export runs with them and retries without if pandoc objects. The
 # rejection is immediate, so the retry is close to free, and the common
 # case pays nothing at all.
-_PANDOC_RTS = ("+RTS", "-c", "-A1m", "-F1.1", "-RTS")
+_PANDOC_RTS = ("+RTS", "-c", "-A2m", "-F1.3", "-RTS")
 
 
 def _rts_rejected(result) -> bool:
@@ -5023,7 +5037,11 @@ def create_app(storage):
                     "Exporting… (1/2) Running pandoc"
                     + (" — bibliography, this can take a few minutes"
                        if bib_src else ""),
-                    duration=60)
+                    # Must outlast the work. At duration=60 the message
+                    # vanished a minute into a multi-minute export and
+                    # left nothing on screen to distinguish "working"
+                    # from "hung".
+                    duration=_PANDOC_CITE_TIMEOUT if bib_src else 60)
                 pandoc_args = [pandoc, str(body_md)]
                 if bib_src:
                     # citeproc renders the citations and the reference
