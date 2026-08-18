@@ -31,6 +31,7 @@ from journal import (
     _column_widths, _cell_text_rows, _autofit_tables, _TEXT_WIDTH_TWIPS,
     _bib_blocks, _filter_bib, _cited_keys, _narrow_bib,
     _PANDOC_RTS, _rts_rejected, _PANDOC_TIMEOUT, _PANDOC_CITE_TIMEOUT,
+    _FONTS_DIR,
     _strip_bib_noise, _bib_value_end, _bib_openers,
 )
 
@@ -834,6 +835,35 @@ def test_turabian_heading_levels():
     j = src.index("heading.where(level: 5)")
     assert "box(" in src[j:j + 90], src[j:j + 90]
     print("  Turabian heading levels OK")
+
+
+def test_bundled_fonts_present_and_licensed():
+    # The bundle is what makes output identical everywhere: without it a
+    # minimal writerdeck matches none of the families the templates name
+    # and typst silently substitutes its own default.
+    for f in ("De-Gruyter-Serif-Regular.otf", "De-Gruyter-Serif-Bold.otf",
+              "De-Gruyter-Serif-Italic.otf", "De-Gruyter-Serif-Bold-Italic.otf",
+              "De-Gruyter-Sans-Math-Regular.otf"):
+        assert (_FONTS_DIR / f).is_file(), f
+
+    # OFL requires its text to travel with the font. Shipping the font
+    # without it is a licence violation, not an oversight.
+    lic = (_FONTS_DIR / "LICENSE").read_text(encoding="utf-8")
+    assert "SIL Open Font License" in lic and "1.1" in lic
+    print("  Bundled fonts and licence OK")
+
+
+def test_templates_name_the_bundled_face_first():
+    # First in the list is the one guaranteed to resolve. If a system
+    # face were listed ahead of it, output would differ per machine --
+    # which is the problem the bundle exists to remove.
+    for name in ("journal.typ", "mla.typ", "turabian.typ"):
+        src = (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
+        i = src.index("#let body-fonts = (")
+        head = src[i:i + 120]
+        assert head.split("(", 1)[1].lstrip().startswith('"De Gruyter Serif"'), name
+        assert "math-fonts" in src, name
+    print("  Templates prefer the bundled face OK")
 
 
 def test_pdf_engine_routing():
@@ -1718,6 +1748,8 @@ if __name__ == "__main__":
     test_cite_timeout_is_larger()
     test_typst_writer_disables_native_citations()
     test_turabian_heading_levels()
+    test_bundled_fonts_present_and_licensed()
+    test_templates_name_the_bundled_face_first()
     test_strip_bib_noise_removes_only_noise()
     test_strip_bib_noise_leaves_unterminated_fields_alone()
     test_bib_value_end_forms()

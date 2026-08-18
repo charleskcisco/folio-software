@@ -317,6 +317,7 @@ class VaultStorage:
 _APP_DIR = Path(__file__).resolve().parent
 _REFS_DIR = _APP_DIR / "refs"
 _TEMPLATES_DIR = _APP_DIR / "templates"
+_FONTS_DIR = _APP_DIR / "fonts"
 _CSL_DIR = _APP_DIR / "csl"
 _SCREENSHOTS_DIR = _APP_DIR / "screenshots"
 _DEFAULT_SPACING = "double"
@@ -5132,8 +5133,14 @@ def create_app(storage):
                         _typst_wrapper(yaml, "body.typ"), encoding="utf-8")
 
                 await loop.run_in_executor(None, _assemble)
-                typst_args = [typst, "compile", "--root", tmp_dir,
-                              str(Path(tmp_dir) / "main.typ"), str(pdf_path)]
+                # --font-path, so the bundled faces are found whether or
+                # not the machine has any fonts of its own. Without it a
+                # minimal writerdeck misses every family the template asks
+                # for and typst quietly substitutes its own default.
+                typst_args = [typst, "compile", "--root", tmp_dir]
+                if _FONTS_DIR.is_dir():
+                    typst_args += ["--font-path", str(_FONTS_DIR)]
+                typst_args += [str(Path(tmp_dir) / "main.typ"), str(pdf_path)]
                 show_notification(
                     state, "Exporting… (2/2) Rendering PDF", duration=_PROGRESS_SHOWN)
                 result = await loop.run_in_executor(

@@ -20,10 +20,23 @@
 // names Times New Roman as the usual choice. Student Macs and Windows
 // machines both have it; the fallbacks are Times-metric so line breaks
 // stay put on a machine that does not.
+// De Gruyter Serif first, because it is the one face guaranteed to be
+// present: it ships in fonts/ and typst is given --font-path. Everything
+// after it is a fallback for a build that somehow lacks the bundle.
+//
+// It is not Times-metric -- Noto SemiCondensed underneath, so narrower --
+// which moves line breaks and page counts. Vertical spacing does not
+// move, because conf() pins the line box to explicit lengths rather than
+// to whatever the font reports.
+// Two backstops, not six. typst warns for every family it cannot find,
+// even when an earlier one resolved, and those warnings land in the
+// export log a person reads when something has gone wrong. Times covers
+// macOS and Windows, Liberation covers Linux, for the case where the
+// bundle is missing entirely.
 #let body-fonts = (
-  "Times New Roman", "Tinos", "Liberation Serif", "TeX Gyre Termes",
-  "Nimbus Roman", "New Computer Modern",
+  "De Gruyter Serif", "Times New Roman", "Liberation Serif",
 )
+#let math-fonts = ("De Gruyter Sans Math", "New Computer Modern Math")
 #let mono-fonts = ("Consolas", "DejaVu Sans Mono", "Liberation Mono")
 
 // ── Vertical metrics ─────────────────────────────────────────────────────
@@ -98,6 +111,8 @@
   )
 
   show raw: set text(font: mono-fonts)
+  // Operators the serif does not carry.
+  show math.equation: set text(font: math-fonts)
 
   // Headings sit at body size and weight. MLA does not prescribe a
   // heading scale for student papers and explicitly warns against making
