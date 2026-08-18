@@ -920,7 +920,10 @@ def test_wrap_bibliography():
           "Augustine. *Teaching Christianity*. 1996.\n\n"
           "Plato. *The Republic*. 1991.\n")
     out = _wrap_bibliography(md)
-    assert "::: {#bibentries}" in out and out.rstrip().endswith(":::")
+    # Both attributes: the id is the Typst label, custom-style names the
+    # docx paragraph style. One fence, two engines.
+    assert "#bibentries" in out and 'custom-style="Bibliography"' in out
+    assert out.rstrip().endswith(":::")
     assert "Body text." in out and "## Bibliography" in out
     # The heading itself stays outside the fence -- it is styled by the
     # heading rule, not the entry rule.
@@ -966,6 +969,23 @@ def test_templates_handle_typed_bibliographies():
     tur = (_TEMPLATES_DIR / "turabian.typ").read_text(encoding="utf-8")
     assert "footer:" in tur and "align(center)" in tur
     print("  Templates handle typed bibliographies OK")
+
+
+def test_reference_docs_style_bibliography_entries():
+    # The docx writer applies the Bibliography paragraph style to the
+    # fenced entries, so the reference documents have to define it with
+    # a hanging indent -- otherwise a typed reference list inherits
+    # BodyText's first-line indent, which is the wrong way round.
+    import zipfile, re as _re
+    for ref in ("single.docx", "double.docx", "dg.single.docx",
+                "dg.double.docx", "quiz.docx"):
+        xml = zipfile.ZipFile(_REFS_DIR / ref).read(
+            "word/styles.xml").decode("utf-8")
+        m = _re.search(
+            r'<w:style [^>]*w:styleId="Bibliography".*?</w:style>', xml, _re.S)
+        assert m, ref
+        assert 'w:hanging="720"' in m.group(0), ref
+    print("  Reference docs style bibliography entries OK")
 
 
 def test_pdf_engine_routing():
@@ -1848,6 +1868,7 @@ if __name__ == "__main__":
     test_wrap_bibliography()
     test_wrap_bibliography_leaves_things_alone()
     test_templates_handle_typed_bibliographies()
+    test_reference_docs_style_bibliography_entries()
     test_rts_rejection_detected()
     test_rts_flags_are_removable()
     test_cite_timeout_is_larger()

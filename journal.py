@@ -1273,7 +1273,12 @@ def _wrap_bibliography(markdown: str) -> str:
     body = markdown[start:end]
     if not body.strip() or ":::" in body:
         return markdown
-    return (markdown[:start] + "\n\n::: {#bibentries}\n"
+    # Both attributes deliberately. The id becomes a <bibentries> label
+    # the Typst template can select; custom-style names a paragraph
+    # style the docx writer applies, which refs/*.docx defines with the
+    # hanging indent. One fence serves both engines.
+    return (markdown[:start]
+            + '\n\n::: {#bibentries custom-style="Bibliography"}\n'
             + body.strip("\n") + "\n:::\n" + markdown[end:])
 
 
@@ -5058,7 +5063,7 @@ def create_app(storage):
             # anything outside those 256 -- Greek, CJK, an arrow -- cannot
             # be written at all and takes the whole export down.
             await loop.run_in_executor(
-                None, lambda: md_path.write_text(content, encoding="utf-8"))
+                None, lambda: md_path.write_text(_wrap_bibliography(content), encoding="utf-8"))
 
             if engine == "typst":
                 # pandoc is the markdown parser only: it emits Typst markup
