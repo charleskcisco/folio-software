@@ -430,11 +430,38 @@ def test_journal_template_untouched_by_new_ones():
     # that comparison silently stops meaning anything -- so pin the two
     # properties that make it docx-derived rather than style-guide-derived.
     src = (_TEMPLATES_DIR / "journal.typ").read_text(encoding="utf-8")
-    # A paragraph gap at all, and a docx top margin: MLA has neither.
+    # What actually separates the docx-derived template from the
+    # style-guide ones: a paragraph gap and the docx top margin. MLA has
+    # neither.
+    #
+    # Note this does NOT include the first-line indent. An earlier version
+    # of this test asserted journal.typ had none, which pinned a bug in
+    # place: refs/*.docx carries w:ind w:firstLine="720" and the template
+    # had simply never transcribed it, so the two engines wrapped their
+    # lines in different places. Both templates indent; they differ on
+    # margin and paragraph gap.
     assert "para-extra" in src, "journal.typ lost its docx paragraph gap"
     assert "1.531in" in src, "journal.typ lost its docx top margin"
-    assert "first-line-indent" not in src, "journal.typ gained an MLA indent"
+    mla = (_TEMPLATES_DIR / "mla.typ").read_text(encoding="utf-8")
+    assert "para-extra" not in mla, "mla.typ gained a docx paragraph gap"
+    assert "1.531in" not in mla, "mla.typ gained the docx top margin"
     print("  journal.typ still docx-derived OK")
+
+
+def test_first_line_indent_matches_reference_docx():
+    # refs/*.docx sets w:ind w:firstLine="720" on BodyText -- half an inch
+    # on every paragraph. journal.typ exists to mirror those documents, so
+    # if one grows an indent the other has to have it too.
+    import zipfile, re as _re
+    for ref in ("double.docx", "single.docx"):
+        xml = zipfile.ZipFile(_REFS_DIR / ref).read(
+            "word/styles.xml").decode("utf-8")
+        m = _re.search(
+            r'<w:style [^>]*w:styleId="BodyText".*?</w:style>', xml, _re.S)
+        assert m and 'w:firstLine="720"' in m.group(0), ref
+    src = (_TEMPLATES_DIR / "journal.typ").read_text(encoding="utf-8")
+    assert "first-line-indent" in src and "0.5in" in src
+    print("  First-line indent matches reference docx OK")
 
 
 def test_line_box_pinned_explicitly():
@@ -1318,6 +1345,7 @@ if __name__ == "__main__":
     test_mla_date_via_template_key()
     test_journal_template_untouched_by_new_ones()
     test_line_box_pinned_explicitly()
+    test_first_line_indent_matches_reference_docx()
     print("  \u2713 Typst export tests passed\n")
 
     print("Testing tool detection...")

@@ -94,7 +94,15 @@
     font: body-fonts, size: 12pt, lang: "en",
     top-edge: box-top, bottom-edge: box-bottom,
   )
-  set par(leading: leading, spacing: leading + para-extra, justify: false)
+  // BodyText carries w:ind w:firstLine="720" -- a half-inch indent on
+  // every paragraph of the style, which Word applies to the first one
+  // after a heading too, hence all: true. This was simply missed when the
+  // reference docs were transcribed, so the two engines have never
+  // wrapped their lines in the same places.
+  set par(
+    leading: leading, spacing: leading + para-extra, justify: false,
+    first-line-indent: (amount: 0.5in, all: true),
+  )
   show raw: set text(font: mono-fonts)
 
   // Heading sizes and spacing from styles.xml (half-points -> pt, twips ->
@@ -124,7 +132,7 @@
   show <refs>: it => {
     pagebreak(weak: true)
     heading(level: 1, if style == "mla" { "Works Cited" } else { "Bibliography" })
-    set par(hanging-indent: 0.5in)
+    set par(hanging-indent: 0.5in, first-line-indent: 0pt)
     it
   }
 
@@ -133,7 +141,8 @@
     // Turabian cover page. w:before=2400tw = 1.667in above the title;
     // gap_before_author = 4320tw = 3in between title and the info block.
     // The cover is always single-spaced regardless of the body setting.
-    set par(leading: leading-single, spacing: leading-single)
+    set par(leading: leading-single, spacing: leading-single,
+            first-line-indent: 0pt)
     v(1.667in)
     align(center)[#title]
     v(3in)
@@ -142,9 +151,39 @@
       #info.join(linebreak())
     ]
     pagebreak(weak: true)
+  } else if style == "" or style == "basic" {
+    // No style: named. pandoc's --standalone renders title/author/date
+    // from the note's metadata through the reference doc's Title, Author
+    // and Date styles, so the docx chain has always produced a centred
+    // block here and this template produced nothing at all.
+    //
+    // Title is 28pt centred with w:after=80tw; Author and Date are 12pt
+    // centred. The three gaps below are measured off a LibreOffice
+    // render rather than derived, because Word's box model and
+    // LibreOffice's interpretation of it do not agree closely enough to
+    // compute them: the target is where the ink actually lands.
+    set par(leading: leading-single, spacing: 0pt, first-line-indent: 0pt)
+    if title != "" {
+      align(center)[#text(size: 28pt)[#title]]
+      v(5.2pt, weak: false)
+    }
+    if author != "" {
+      align(center)[#author]
+      v(4.5pt, weak: false)
+    }
+    if date != "" {
+      align(center)[#date]
+      // The body's first paragraph arrives with its own above-spacing of
+      // leading + para-extra. In the docx the gap after Date is only its
+      // line advance plus BodyText's 9pt w:before, which is smaller --
+      // and block spacing takes the maximum, so it cannot be reduced by
+      // adding. Cancel the difference instead.
+      v(9.5pt - (leading + para-extra), weak: false)
+    }
   } else if style == "mla" {
     // MLA header block: name / instructor / course / date, flush left and
     // double-spaced, followed by a centred title.
+    set par(first-line-indent: 0pt)
     let info = (author, instructor, course, date).filter(x => x != "")
     if info.len() > 0 {
       info.join(linebreak())
