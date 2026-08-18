@@ -1290,6 +1290,14 @@ _PANDOC_TIMEOUT = 60
 # to catch a hang, not to bound honest work.
 _PANDOC_CITE_TIMEOUT = 600
 
+# Every progress notification is shown for as long as the step it
+# describes is allowed to take. A message that expires first is worse
+# than none: the screen goes quiet while the work continues, and there
+# is nothing left to distinguish "still going" from "died silently".
+# A writerdeck is slow enough that this happens on ordinary exports,
+# not just the pathological ones.
+_PROGRESS_SHOWN = 900
+
 _CITEKEY_RE = re.compile(r"@([A-Za-z0-9_][A-Za-z0-9_:.#$%&+?<>~/-]*)")
 
 # Blocks that carry no key of their own but that entries may depend on.
@@ -4233,7 +4241,7 @@ def create_app(storage):
                         state, "Install LibreOffice to print .docx files.")
                     return
                 show_notification(
-                    state, "Preparing document for printing…", duration=60)
+                    state, "Preparing document for printing…", duration=_PROGRESS_SHOWN)
                 tmp_dir = tempfile.mkdtemp(prefix="journal_print_")
                 lo_profile = Path(tmp_dir) / "loprofile"
                 lo_args = [
@@ -4249,7 +4257,7 @@ def create_app(storage):
                     show_notification(
                         state, "Print failed: could not convert .docx to PDF.")
                     return
-            show_notification(state, f"Printing on {printer}…", duration=60)
+            show_notification(state, f"Printing on {printer}…", duration=_PROGRESS_SHOWN)
             r = await loop.run_in_executor(
                 None, lambda: subprocess.run(
                     ["lp", "-d", printer, "-o", "sides=two-sided-long-edge",
@@ -5048,11 +5056,7 @@ def create_app(storage):
                     "Exporting… (1/2) Running pandoc"
                     + (" — bibliography, this can take a few minutes"
                        if bib_src else ""),
-                    # Must outlast the work. At duration=60 the message
-                    # vanished a minute into a multi-minute export and
-                    # left nothing on screen to distinguish "working"
-                    # from "hung".
-                    duration=_PANDOC_CITE_TIMEOUT if bib_src else 60)
+                    duration=_PROGRESS_SHOWN)
                 pandoc_args = [pandoc, str(body_md)]
                 if bib_src:
                     # citeproc renders the citations and the reference
@@ -5107,7 +5111,7 @@ def create_app(storage):
                 typst_args = [typst, "compile", "--root", tmp_dir,
                               str(Path(tmp_dir) / "main.typ"), str(pdf_path)]
                 show_notification(
-                    state, "Exporting… (2/2) Rendering PDF", duration=60)
+                    state, "Exporting… (2/2) Rendering PDF", duration=_PROGRESS_SHOWN)
                 result = await loop.run_in_executor(
                     None, lambda: subprocess.run(
                         typst_args, capture_output=True, text=True, timeout=120))
@@ -5190,7 +5194,7 @@ def create_app(storage):
                 return
 
             steps = "2/3" if export_format == "pdf" else "2/2"
-            show_notification(state, f"Exporting\u2026 ({steps}) Post-processing", duration=60)
+            show_notification(state, f"Exporting\u2026 ({steps}) Post-processing", duration=_PROGRESS_SHOWN)
             try:
                 await loop.run_in_executor(
                     None, lambda: _postprocess_docx(str(docx_path), yaml))
@@ -5201,7 +5205,7 @@ def create_app(storage):
                 show_notification(state, f"Exported: {_fmt_dest(docx_path)}")
                 return
 
-            show_notification(state, "Exporting\u2026 (3/3) Converting to PDF", duration=60)
+            show_notification(state, "Exporting\u2026 (3/3) Converting to PDF", duration=_PROGRESS_SHOWN)
             # Give LibreOffice a private, writable profile under the temp
             # dir. Headless soffice commonly exits 0 while producing no
             # output when its default user profile is missing or locked
