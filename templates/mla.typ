@@ -61,6 +61,11 @@
 #let box-bottom = -0.216em
 #let leading-double = 1.193em
 
+// Headings that begin a reference list, and a near-enough plain-text
+// reading of a heading for comparison. See turabian.typ.
+#let _BIB_TITLES = ("bibliography", "works cited", "references")
+#let _plain(body) = lower(repr(body).replace("[", "").replace("]", "")).trim()
+
 #let conf(
   title: "",
   author: "",
@@ -136,6 +141,23 @@
   // never does -- it is here so the template is correct MLA for anyone
   // upstream who does. pandoc's citeproc emits the list already formatted
   // and labelled <refs>; this places it, not the citation rendering.
+  // A hand-typed reference list, which is the normal case: students type
+  // these far more often than they keep a .bib. Its own page, centred
+  // heading, hanging indent -- and styled regardless of the heading
+  // level the writer happened to use.
+  show heading: it => {
+    if _BIB_TITLES.any(t => _plain(it.body) == t) {
+      pagebreak(weak: true)
+      block(above: leading-double, below: leading-double,
+            align(center, text(weight: "regular", style: "normal", it.body)))
+    } else { it }
+  }
+
+  show <bibentries>: it => {
+    set par(hanging-indent: 0.5in, first-line-indent: 0pt)
+    it
+  }
+
   show <refs>: it => {
     pagebreak(weak: true)
     align(center)[Works Cited]

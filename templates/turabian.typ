@@ -37,13 +37,23 @@
 // explicit lengths rather than the "ascender"/"descender" keywords.
 #let box-top = 0.891em
 #let box-bottom = -0.216em
+#let leading-single = 0.043em
 #let leading-double = 1.193em
 
 // Baseline to baseline for double-spaced body text: the line box plus
 // its leading. Named because the heading spacing is expressed in whole
 // lines rather than in points.
 #let line-advance = 2.30em
-#let leading-single = 0.043em
+
+// Headings that begin a reference list, lowercased for comparison.
+#let _BIB_TITLES = ("bibliography", "works cited", "references")
+
+// The text of a heading, near enough for comparison. Typst has no
+// plain-text extractor, and a recursive walk cannot accumulate into an
+// outer variable -- those are read-only inside a function. repr() of a
+// simple heading is "[Bibliography]", so stripping the brackets gets
+// there for the only case this needs to recognise.
+#let _plain(body) = lower(repr(body).replace("[", "").replace("]", "")).trim()
 
 #let conf(
   title: "",
@@ -101,11 +111,14 @@
   // generate its own centred footer, which lands a *second* page number
   // at the bottom of every page alongside the one in the header. The
   // counter is displayed explicitly instead, with its own pattern.
+  // Turabian permits the page number either top right or bottom centre.
+  // Bottom centre keeps the top margin clear, which reads better on a
+  // paper with no running head.
   set page(
-    header-ascent: 0.35in,
-    header: context {
+    footer-descent: 0.35in,
+    footer: context {
       set text(font: body-fonts, size: 12pt)
-      align(right)[#counter(page).display("1")]
+      align(center)[#counter(page).display("1")]
     },
   )
 
@@ -157,6 +170,34 @@
   show heading.where(level: 1): set text(weight: "bold")
   show heading.where(level: 2): set text(style: "italic")
   show heading.where(level: 5): it => box(strong[#it.body.])
+
+  // A bibliography starts its own page. Students type these by hand far
+  // more often than they use a .bib, and the docx chain has always done
+  // this via _lua_basic_filter -- the Typst path only ever handled the
+  // <refs> block citeproc emits, so a typed heading got no break at all.
+  show heading: it => {
+    if _BIB_TITLES.any(t => _plain(it.body) == t) {
+      // Styled here rather than left to the level rules, because the
+      // level is the student's arbitrary choice of # or ## and should
+      // not decide how a reference list is headed. Typed by hand is the
+      // normal case, so it has to look right however it was typed.
+      pagebreak(weak: true)
+      block(above: leading-double, below: leading-double,
+            text(weight: "bold", style: "normal", it.body))
+    } else { it }
+  }
+
+  // The entries themselves: hanging indent, single-spaced within an
+  // entry and a full line between them. _wrap_bibliography puts them in
+  // a labelled block before pandoc sees the markdown, because a Typst
+  // show rule cannot reach forward from a heading to the content after
+  // it -- setting par inside a show par rule does not affect the
+  // paragraph being shown, and rebuilding the paragraph recurses.
+  show <bibentries>: it => {
+    set par(leading: leading-single, spacing: leading-double,
+            hanging-indent: 0.5in, first-line-indent: 0pt)
+    it
+  }
 
   // Block quotations are indented and set single-spaced, which is one of
   // the few places Turabian departs from double spacing throughout.

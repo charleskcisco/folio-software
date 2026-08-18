@@ -1235,6 +1235,48 @@ def _pdf_engine(yaml: dict, setting: str = "typst") -> str:
     return "typst" if detect_typst() else "libreoffice"
 
 
+# Headings that begin a reference list, however the writer capitalised
+# them. Matches _BIB_TITLES in the templates and is-bib-heading in the
+# Lua filters, which have done the same thing for the docx path since
+# the beginning.
+_BIB_HEADING_RE = re.compile(
+    r"^(#{1,6})\s*(bibliography|works\s+cited|references)\s*$",
+    re.IGNORECASE | re.MULTILINE)
+
+
+def _wrap_bibliography(markdown: str) -> str:
+    """Fence a hand-typed reference list so the template can style it.
+
+    Students type bibliographies far more often than they keep a .bib,
+    and a typed one is just paragraphs: it inherits the body's half-inch
+    *first-line* indent where a reference list needs a *hanging* one.
+
+    The fix has to happen here rather than in the template, because a
+    Typst show rule cannot reach forward from a heading to the content
+    following it. Setting par inside a `show par` rule does not affect
+    the paragraph being shown, and rebuilding the paragraph to change it
+    recurses until Typst gives up. Wrapping the entries in a labelled
+    div gives the template something it can actually select.
+
+    Everything from the heading to the next heading (or the end) is
+    taken as entries. Untouched if there is no such heading, if the
+    section is empty, or if it already carries a fence -- in each case
+    the writer's own markup wins.
+    """
+    m = _BIB_HEADING_RE.search(markdown)
+    if not m:
+        return markdown
+    start = m.end()
+    rest = markdown[start:]
+    nxt = re.search(r"^#{1,6}\s", rest, re.MULTILINE)
+    end = start + (nxt.start() if nxt else len(rest))
+    body = markdown[start:end]
+    if not body.strip() or ":::" in body:
+        return markdown
+    return (markdown[:start] + "\n\n::: {#bibentries}\n"
+            + body.strip("\n") + "\n:::\n" + markdown[end:])
+
+
 def _strip_frontmatter(content: str) -> str:
     """Drop the YAML frontmatter block, keeping the body.
 
@@ -5054,7 +5096,8 @@ def create_app(storage):
                 body_md = Path(tmp_dir) / "body.md"
                 await loop.run_in_executor(
                     None, lambda: body_md.write_text(
-                        _strip_frontmatter(content), encoding="utf-8"))
+                        _wrap_bibliography(_strip_frontmatter(content)),
+                        encoding="utf-8"))
 
                 body_path = Path(tmp_dir) / "body.typ"
                 # Announced before the preparation, not after it. Reading

@@ -30,6 +30,7 @@ from journal import (
     _template_name, _DEFAULT_TEMPLATE, _default_csl_path, _CSL_DIR,
     _column_widths, _cell_text_rows, _autofit_tables, _TEXT_WIDTH_TWIPS,
     _bib_blocks, _filter_bib, _cited_keys, _narrow_bib,
+    _wrap_bibliography,
     _PANDOC_RTS, _rts_rejected, _PANDOC_TIMEOUT, _PANDOC_CITE_TIMEOUT,
     _FONTS_DIR,
     _strip_bib_noise, _bib_value_end, _bib_openers,
@@ -910,6 +911,63 @@ def test_rts_is_bound_before_it_is_read():
     print("  rts bound before read OK")
 
 
+def test_wrap_bibliography():
+    # A hand-typed reference list is the normal case for a student, and
+    # it arrives as ordinary paragraphs -- so it inherits the body's
+    # half-inch *first-line* indent where it needs a *hanging* one. The
+    # fence gives the template something it can select.
+    md = ("Body text.\n\n## Bibliography\n\n"
+          "Augustine. *Teaching Christianity*. 1996.\n\n"
+          "Plato. *The Republic*. 1991.\n")
+    out = _wrap_bibliography(md)
+    assert "::: {#bibentries}" in out and out.rstrip().endswith(":::")
+    assert "Body text." in out and "## Bibliography" in out
+    # The heading itself stays outside the fence -- it is styled by the
+    # heading rule, not the entry rule.
+    assert out.index("## Bibliography") < out.index("::: {#bibentries}")
+
+    for title in ("# Works Cited", "### references", "## REFERENCES"):
+        assert "#bibentries" in _wrap_bibliography(
+            "Body.\n\n%s\n\nEntry one.\n" % title), title
+    print("  Bibliography wrapping OK")
+
+
+def test_wrap_bibliography_leaves_things_alone():
+    # No such heading: untouched.
+    plain = "Body text.\n\n## Discussion\n\nMore body.\n"
+    assert _wrap_bibliography(plain) == plain
+
+    # Already fenced by the writer: their markup wins.
+    fenced = "## Bibliography\n\n::: {#custom}\nEntry.\n:::\n"
+    assert _wrap_bibliography(fenced) == fenced
+
+    # Empty section: nothing to wrap.
+    empty = "## Bibliography\n"
+    assert _wrap_bibliography(empty) == empty
+
+    # Stops at the next heading rather than swallowing the rest.
+    two = ("## Bibliography\n\nEntry one.\n\n## Appendix\n\nNot an entry.\n")
+    out = _wrap_bibliography(two)
+    assert out.index(":::\n") < out.index("## Appendix"), out
+    print("  Bibliography wrapping declines correctly OK")
+
+
+def test_templates_handle_typed_bibliographies():
+    # Every template must break the page and style the entries, because
+    # the citeproc <refs> path only fires for notes with a .bib -- which
+    # a student will not have.
+    for name in ("turabian.typ", "mla.typ"):
+        src = (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
+        assert "_BIB_TITLES" in src, name
+        assert "pagebreak(weak: true)" in src, name
+        assert "<bibentries>" in src, name
+        assert "hanging-indent" in src, name
+    # Page numbers bottom centre, not top right.
+    tur = (_TEMPLATES_DIR / "turabian.typ").read_text(encoding="utf-8")
+    assert "footer:" in tur and "align(center)" in tur
+    print("  Templates handle typed bibliographies OK")
+
+
 def test_pdf_engine_routing():
     saved = os.environ.pop("JOURNAL_PDF_ENGINE", None)
     try:
@@ -1787,6 +1845,9 @@ if __name__ == "__main__":
     test_filter_bib_gives_up_rather_than_lose_a_source()
     test_narrow_bib_falls_back_when_unhelpful()
     test_cited_keys_extraction()
+    test_wrap_bibliography()
+    test_wrap_bibliography_leaves_things_alone()
+    test_templates_handle_typed_bibliographies()
     test_rts_rejection_detected()
     test_rts_flags_are_removable()
     test_cite_timeout_is_larger()
