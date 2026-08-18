@@ -30,21 +30,35 @@
 // and leading has to be derived from the line box.
 //
 // The line box depends on text.top-edge / bottom-edge, whose defaults are
-// cap-height and baseline — a box of only ~0.66em. conf() overrides them to
-// ascender/descender below so the box is a predictable 1.107em for a
-// Times-metric face (ascender 0.891em + descender 0.216em), which is what
-// these two constants are derived against. Change one, change the other.
+// cap-height and baseline — a box of only ~0.66em. conf() pins them to
+// explicit lengths below so the box is 1.107em (ascender 0.891em +
+// descender 0.216em), which is what these two constants are derived
+// against. Change one, change the other.
+//
+// The lengths are explicit rather than the "ascender"/"descender"
+// keywords because those resolve to the font's *typo* metrics — 0.693em
+// for real Times New Roman, not the 0.891em hhea ascent — which made the
+// box 0.907em and put double spacing at 2.10em where LibreOffice renders
+// 2.30em. Explicit lengths also make every fallback face in body-fonts
+// set the same page.
 //
 //     single (w:line=240)  baseline-to-baseline 1.15em  -> leading 0.043em
 //     double (w:line=480)  baseline-to-baseline 2.30em  -> leading 1.193em
+#let box-top = 0.891em
+#let box-bottom = -0.216em
 #let leading-single = 0.043em
 #let leading-double = 1.193em
 
-// BodyText carries w:before=180 w:after=180 (9pt each), which Word adds on
-// top of line spacing between consecutive paragraphs. Typst's par.spacing
-// replaces the inter-line gap rather than adding to it, so fold the leading
-// back in to land on the same baseline distance.
-#let para-extra = 18pt
+// BodyText carries w:before=180 w:after=180 (9pt each). Word would add
+// both between consecutive paragraphs, for 18pt — but the chain this
+// template mirrors renders through LibreOffice, which collapses them to
+// the larger of the two. Measured on an actual export, the gap between
+// paragraphs is 27.6pt + 9pt, not 27.6pt + 18pt.
+//
+// Typst's par.spacing replaces the inter-line gap rather than adding to
+// it, so the leading is folded back in to land on the same baseline
+// distance.
+#let para-extra = 9pt
 
 #let conf(
   title: "",
@@ -73,12 +87,12 @@
     header-ascent: 0.35in,
   )
 
-  // Pin the line box to ascender..descender so leading-single /
-  // leading-double above are measured against a known quantity rather
-  // than Typst's cap-height default.
+  // Pin the line box so leading-single / leading-double above are
+  // measured against a known quantity rather than Typst's cap-height
+  // default, and against the same quantity on every machine.
   set text(
     font: body-fonts, size: 12pt, lang: "en",
-    top-edge: "ascender", bottom-edge: "descender",
+    top-edge: box-top, bottom-edge: box-bottom,
   )
   set par(leading: leading, spacing: leading + para-extra, justify: false)
   show raw: set text(font: mono-fonts)

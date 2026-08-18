@@ -430,9 +430,27 @@ def test_journal_template_untouched_by_new_ones():
     # that comparison silently stops meaning anything -- so pin the two
     # properties that make it docx-derived rather than style-guide-derived.
     src = (_TEMPLATES_DIR / "journal.typ").read_text(encoding="utf-8")
-    assert "para-extra = 18pt" in src, "journal.typ lost its docx paragraph gap"
+    # A paragraph gap at all, and a docx top margin: MLA has neither.
+    assert "para-extra" in src, "journal.typ lost its docx paragraph gap"
+    assert "1.531in" in src, "journal.typ lost its docx top margin"
     assert "first-line-indent" not in src, "journal.typ gained an MLA indent"
     print("  journal.typ still docx-derived OK")
+
+
+def test_line_box_pinned_explicitly():
+    # text.top-edge: "ascender" resolves to the font's *typo* ascender --
+    # 0.693em for real Times New Roman, not the 0.891em the leading
+    # constants are derived against. Using the keyword silently shrinks
+    # the line box to 0.907em and puts double spacing at 2.10em where
+    # LibreOffice renders 2.30em. Every template must pin it by length.
+    for name in ("journal.typ", "mla.typ", "turabian.typ"):
+        src = (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
+        assert 'top-edge: "ascender"' not in src, name
+        assert 'bottom-edge: "descender"' not in src, name
+        assert "box-top = 0.891em" in src, name
+        assert "box-bottom = -0.216em" in src, name
+        assert "top-edge: box-top" in src, name
+    print("  Line box pinned by length OK")
 
 
 def test_pdf_engine_routing():
@@ -1299,6 +1317,7 @@ if __name__ == "__main__":
     test_new_templates_expose_conf()
     test_mla_date_via_template_key()
     test_journal_template_untouched_by_new_ones()
+    test_line_box_pinned_explicitly()
     print("  \u2713 Typst export tests passed\n")
 
     print("Testing tool detection...")
