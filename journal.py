@@ -1285,6 +1285,11 @@ def _default_csl_path(yaml: dict) -> Optional[Path]:
 # the export entirely.
 _PANDOC_TIMEOUT = 60
 
+# Citing notes run pandoc under the memory-saving GC flags, which are
+# several times slower, on hardware that is already slow. The cap exists
+# to catch a hang, not to bound honest work.
+_PANDOC_CITE_TIMEOUT = 600
+
 _CITEKEY_RE = re.compile(r"@([A-Za-z0-9_][A-Za-z0-9_:.#$%&+?<>~/-]*)")
 
 # Blocks that carry no key of their own but that entries may depend on.
@@ -1401,6 +1406,40 @@ def _filter_bib(text: str, keys: set) -> Optional[str]:
         if present and k not in kept and k.lower() not in {x.lower() for x in kept}:
             return None
     return result
+
+
+_RTS_SUPPORT = {}
+
+
+def _pandoc_rts_args(pandoc: str) -> list:
+    """GHC runtime flags that buy peak memory with time, when available.
+
+    pandoc's default copying collector wants roughly twice the live heap.
+    On a 512MB writerdeck that is the whole ballgame: rendering a
+    2800-word note with citations peaked at 172MB and was killed by the
+    OOM killer, and the same command with these flags completed. -c
+    selects the compacting collector, -A1m shrinks the allocation area
+    and -F1.1 stops the heap growing speculatively.
+
+    They are not free -- many more, more expensive collections -- so they
+    are used only where the memory is actually tight, which is the
+    citeproc path.
+
+    Not every build enables -rtsopts, and a build without it *fails* when
+    handed +RTS rather than ignoring it, so support is probed once per
+    process and cached.
+    """
+    if pandoc not in _RTS_SUPPORT:
+        try:
+            probe = subprocess.run(
+                [pandoc, "+RTS", "-c", "-RTS", "--version"],
+                capture_output=True, timeout=20, **_no_console())
+            ok = probe.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        _RTS_SUPPORT[pandoc] = (
+            ["+RTS", "-c", "-A1m", "-F1.1", "-RTS"] if ok else [])
+    return _RTS_SUPPORT[pandoc]
 
 
 def _narrow_bib(bib_src: Path, markdown: str, tmp_dir) -> Path:
@@ -4871,18 +4910,27 @@ def create_app(storage):
                     # already (^[Again, @key]). Footnotes do not nest, so
                     # the citation vanished and left an empty note.
                     bib_use = _narrow_bib(bib_src, content, tmp_dir)
+                    pandoc_args[1:1] = _pandoc_rts_args(pandoc)
                     pandoc_args += ["--citeproc", f"--bibliography={bib_use}"]
                     if csl_src:
                         pandoc_args.append(f"--csl={csl_src}")
                 else:
                     pandoc_args += ["--from", "markdown-citations"]
                 pandoc_args += ["--to", "typst", "-o", str(body_path)]
+                # A citing note runs pandoc under the memory-saving GC
+                # flags, which are several times slower. Saying so beats
+                # a progress message that looks stuck for minutes.
                 show_notification(
-                    state, "Exporting… (1/2) Running pandoc", duration=60)
+                    state,
+                    "Exporting… (1/2) Running pandoc"
+                    + (" — bibliography, this can take a few minutes"
+                       if bib_src else ""),
+                    duration=60)
                 result = await loop.run_in_executor(
                     None, lambda: subprocess.run(
                         pandoc_args, capture_output=True, text=True,
-                        timeout=_PANDOC_TIMEOUT * (3 if bib_src else 1)))
+                        timeout=(_PANDOC_CITE_TIMEOUT if bib_src
+                                 else _PANDOC_TIMEOUT)))
                 if result.returncode != 0 or not body_path.exists():
                     err = (result.stderr or result.stdout or "").strip()
                     tail = err.splitlines()[-1][:70] if err else "no output file produced"
@@ -4943,6 +4991,7 @@ def create_app(storage):
                 # outrank metadata, so this wins without touching the note.
                 bib_src = _resolve_bib_path(yaml, state.storage.vault_dir)
                 if bib_src:
+                    pandoc_args[1:1] = _pandoc_rts_args(pandoc)
                     pandoc_args.append(
                         f"--bibliography={_narrow_bib(bib_src, content, tmp_dir)}")
                 csl_src = _resolve_csl_path(yaml, state.storage.vault_dir)
@@ -4951,12 +5000,17 @@ def create_app(storage):
             pandoc_args.extend(["-o", str(docx_path)])
 
             steps = "1/3" if export_format == "pdf" else "1/2"
-            show_notification(state, f"Exporting\u2026 ({steps}) Running pandoc", duration=60)
+            slow = " — bibliography, this can take a few minutes" if (
+                "--citeproc" in pandoc_args) else ""
+            show_notification(
+                state, f"Exporting\u2026 ({steps}) Running pandoc{slow}",
+                duration=60)
             result = await loop.run_in_executor(
                 None, lambda: subprocess.run(
                     pandoc_args, capture_output=True, text=True,
-                    timeout=_PANDOC_TIMEOUT * (3 if "--citeproc" in pandoc_args
-                                               else 1)))
+                    timeout=(_PANDOC_CITE_TIMEOUT
+                             if "--citeproc" in pandoc_args
+                             else _PANDOC_TIMEOUT)))
             # Trust the output file, not just the exit code: a tool can
             # exit 0 yet write nothing. Surface the real error so silent
             # failures on minimal devices become visible.

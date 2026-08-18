@@ -30,6 +30,7 @@ from journal import (
     _template_name, _DEFAULT_TEMPLATE, _default_csl_path, _CSL_DIR,
     _column_widths, _cell_text_rows, _autofit_tables, _TEXT_WIDTH_TWIPS,
     _bib_blocks, _filter_bib, _cited_keys, _narrow_bib,
+    _pandoc_rts_args, _PANDOC_TIMEOUT, _PANDOC_CITE_TIMEOUT,
 )
 
 
@@ -713,6 +714,29 @@ def test_cited_keys_extraction():
     # Trailing punctuation is not part of a key.
     assert "e2024" in _cited_keys("as noted by @e2024.")
     print("  Citekey extraction OK")
+
+
+def test_pandoc_rts_args_probe():
+    # A build without -rtsopts *fails* when handed +RTS rather than
+    # ignoring it, so an unprobed flag would break every citing export
+    # on such a machine. No pandoc at all must yield no flags, not a
+    # crash.
+    assert _pandoc_rts_args("/nonexistent/pandoc") == []
+
+    real = detect_pandoc()
+    if real:
+        args = _pandoc_rts_args(real)
+        assert args == [] or (args[0] == "+RTS" and args[-1] == "-RTS"), args
+        # Probing twice must not shell out twice.
+        assert _pandoc_rts_args(real) is _pandoc_rts_args(real)
+    print("  pandoc RTS probe OK")
+
+
+def test_cite_timeout_is_larger():
+    # The GC flags are several times slower, on hardware that is already
+    # slow. A citing export must not be capped at the plain budget.
+    assert _PANDOC_CITE_TIMEOUT > _PANDOC_TIMEOUT * 5
+    print("  Citeproc timeout headroom OK")
 
 
 def test_pdf_engine_routing():
@@ -1592,6 +1616,8 @@ if __name__ == "__main__":
     test_filter_bib_gives_up_rather_than_lose_a_source()
     test_narrow_bib_falls_back_when_unhelpful()
     test_cited_keys_extraction()
+    test_pandoc_rts_args_probe()
+    test_cite_timeout_is_larger()
     test_journal_template_untouched_by_new_ones()
     test_line_box_pinned_explicitly()
     test_first_line_indent_matches_reference_docx()
