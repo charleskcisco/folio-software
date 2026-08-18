@@ -802,6 +802,18 @@ def test_bib_openers_is_independent_of_block_parsing():
     print("  Independent opener scan OK")
 
 
+def test_typst_writer_disables_native_citations():
+    # The Typst writer emits #cite(<key>) when it can, which needs a
+    # #bibliography() the templates deliberately do not declare -- so the
+    # export must ask for citeproc's rendered text instead. Whether a
+    # given pandoc does this by default varies by version; 3.1.11.1 on a
+    # writerdeck does, 3.10 does not, and the export cannot depend on it.
+    src = (Path(__file__).parent / "journal.py").read_text(encoding="utf-8")
+    assert '"--to", "typst-citations"' in src, "typst writer may emit #cite()"
+    assert '"--to", "typst",' not in src, "a bare typst writer target remains"
+    print("  Typst native citations disabled OK")
+
+
 def test_pdf_engine_routing():
     saved = os.environ.pop("JOURNAL_PDF_ENGINE", None)
     try:
@@ -1682,6 +1694,7 @@ if __name__ == "__main__":
     test_rts_rejection_detected()
     test_rts_flags_are_removable()
     test_cite_timeout_is_larger()
+    test_typst_writer_disables_native_citations()
     test_strip_bib_noise_removes_only_noise()
     test_strip_bib_noise_leaves_unterminated_fields_alone()
     test_bib_value_end_forms()

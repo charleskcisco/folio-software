@@ -5075,7 +5075,22 @@ def create_app(storage):
                         pandoc_args.append(f"--csl={csl_src}")
                 else:
                     pandoc_args += ["--from", "markdown-citations"]
-                pandoc_args += ["--to", "typst", "-o", str(body_path)]
+                # typst-citations, not typst: the Typst writer supports
+                # citations natively, and when a writer does, pandoc emits
+                # its native form -- #cite(<key>) -- instead of the text
+                # citeproc rendered. Typst then refuses the document with
+                # "the document does not contain a bibliography", because
+                # #cite() needs a #bibliography() the template does not
+                # have and must not have (Typst's own engine turns each
+                # citation into a new footnote, which is what 76e1ee6
+                # moved away from).
+                #
+                # Disabling the extension makes the writer emit citeproc's
+                # output as ordinary text. Harmless where the writer
+                # already did that -- byte-identical on pandoc 3.10 -- and
+                # the fix on builds that do not, such as the 3.1.11.1 a
+                # writerdeck gets from Debian.
+                pandoc_args += ["--to", "typst-citations", "-o", str(body_path)]
                 result = await loop.run_in_executor(
                     None, lambda: subprocess.run(
                         pandoc_args, capture_output=True, text=True,
