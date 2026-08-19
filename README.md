@@ -1,9 +1,9 @@
-# Journal—a writerdeck-compatible companion for your Obsidian vault 
+# Folio—a writerdeck-compatible companion for your Obsidian vault 
 
 <img width="1280" height="400" alt="screenshot_20260228_143656" src="https://github.com/user-attachments/assets/de477a9f-d190-4fc8-b9c1-65802c082b43" />
 
 ## About
-One simple idea undergirds Journal, a terminal-based Markdown editor built on prompt_toolkit: my Obsidian vault should stretch across different devices. Obsidian, as an Electron application, works best in a standard desktop environment; but sometimes I don't want a standard desktop environment. Different devices offer other computing paradigms with distinct benefits. One device category in particular, the writerdeck, overlaps in functionality with Obsidian, but with its stripped down operating system cannot run that application effectively. Thus, I designed Journal as a CLI text editor for reading and writing `.md` files directly in my synced vault directory.
+One simple idea undergirds Folio, a terminal-based Markdown editor built on prompt_toolkit: my Obsidian vault should stretch across different devices. Obsidian, as an Electron application, works best in a standard desktop environment; but sometimes I don't want a standard desktop environment. Different devices offer other computing paradigms with distinct benefits. One device category in particular, the writerdeck, overlaps in functionality with Obsidian, but with its stripped down operating system cannot run that application effectively. Thus, I designed Folio as a CLI text editor for reading and writing `.md` files directly in my synced vault directory.
 
 Some background before I explain more: I love Obsidian. I've been using it for more than seven years at this point as my primary text processing surface. I fled from the chilly embrace of Microsoft Word (I'm too old to have ever been a serious Google Docs devotee) when the time came to start writing my PhD thesis in 2018. At that point, I came to regard dependence upon proprietary software and file formats to compose, edit, and store my thoughts as abhorrent. I had played around in Evernote, Onenote, Word, looked at programs like Scrivener and Ulysses when I finally stumbled on Obsidian and cobbled together a suite of plug-ins to manage citations and conversion in concert with marvelous open source tools like Zotero and Pandoc. That setup served me well for five years, and produced what my examiners called "one of the cleanest and best formatted submissions" they 
 had ever seen. For work wholly produced in a clean, portable, and lightweight format using free tools, that's not bad.
@@ -18,16 +18,16 @@ The writerdeck is a single-purpose composition appliance, sometimes manufactured
 
 At that point, the writer has two choices—well this writer had two choices. The first is this: to abandon a tool that has served him well for many years in favor of simple but limited alternatives (Wordgrinder, Micro) that could perhaps be plugged back into his working system. This could suit. The solution would be to draft on Wordgrinder, Micro, or whatever else writerdeck manufacturers employ and export the resulting files to a more robust system for editing and production in Obsidian later. Many people do precisely this and I suspect they do just fine.
 
-Alternatively, the writer could design an entirely new system with the principles and functionality of Obsidian in mind, but minimal and lightweight enough to run in Linux on a Raspberry Pi Zero 2 W or similar hardware—to serve as a surface for the drafting portion of the writing process that can at the fullness of time give way to the editing portion in Obsidian. (Crucial to this is Syncthing, which runs on both my PC and my Linux-powered writerdeck). Thus was born Journal, a writerdeck-compatible companion for my Obsidian vault. 
+Alternatively, the writer could design an entirely new system with the principles and functionality of Obsidian in mind, but minimal and lightweight enough to run in Linux on a Raspberry Pi Zero 2 W or similar hardware—to serve as a surface for the drafting portion of the writing process that can at the fullness of time give way to the editing portion in Obsidian. (Crucial to this is Syncthing, which runs on both my PC and my Linux-powered writerdeck). Thus was born Folio, a writerdeck-compatible companion for my Obsidian vault. 
 
 ## Specifics
-Journal conforms to my vault, where I use a relatively minimal set of plugins for academic writing and note taking. Hence, its features, split between the Journal and the Editor, are as follows:
+Folio conforms to my vault, where I use a relatively minimal set of plugins for academic writing and note taking. Hence, its features, split between the Folio and the Editor, are as follows:
 
-Journal opens into the Journal (surprise), a two-pane layout that shows the .md files in one's vault on the left, organized in reverse-chronological order; on the right (on wider displays only) is a preview pane designed to give a glimpse into the file's contents (YAML excluded). From here, you can make a new file, rename, delete, or duplicate existing files, search your vault via filename, refresh your list, update Journal, or shut down your writerdeck (assuming you're on a Linux-powered system).
+Folio opens into the Folio (surprise), a two-pane layout that shows the .md files in one's vault on the left, organized in reverse-chronological order; on the right (on wider displays only) is a preview pane designed to give a glimpse into the file's contents (YAML excluded). From here, you can make a new file, rename, delete, or duplicate existing files, search your vault via filename, refresh your list, update Folio, or shut down your writerdeck (assuming you're on a Linux-powered system).
 
 <img width="1280" height="400" alt="screenshot_20260228_143656" src="https://github.com/user-attachments/assets/3a1479cc-5e74-49d6-ae64-d49198504c71" />
 
-From the Journal, you can also view a list of exports (.docx or .pdf files created via a custom pandoc/libreoffice pipeline, on which below) and share (via [File Browser](https://github.com/filebrowser/filebrowser)) or print them 
+From the Folio, you can also view a list of exports (.docx or .pdf files created via a custom pandoc/libreoffice pipeline, on which below) and share (via [File Browser](https://github.com/filebrowser/filebrowser)) or print them 
 
 <img width="1280" height="400" alt="screenshot_20260228_143701" src="https://github.com/user-attachments/assets/a45c3b48-6105-4202-9a7b-e8546ddab4d3" />
 
@@ -39,7 +39,7 @@ Once you enter the Editor screen, you may edit your document (surprise again) in
 
 <img width="1280" height="400" alt="screenshot_20260228_143644" src="https://github.com/user-attachments/assets/e172901f-c75c-4c36-a09e-818de154649b" />
 
-As in Obsidian, you can use ctrl+p to open a command palette, from which you can access a host of features (most of those are also available via a set of Journal-specific keybindings).
+As in Obsidian, you can use ctrl+p to open a command palette, from which you can access a host of features (most of those are also available via a set of Folio-specific keybindings).
 
 <img width="1280" height="400" alt="screenshot_20260228_143718" src="https://github.com/user-attachments/assets/49b0a202-ce18-45a3-aff4-7ce2e968cc52" />
 
@@ -63,13 +63,13 @@ These binds do exactly what they say on the tin, and are only barely more intere
 Markdown is a plain text language that handles **bold**, *italics*, ***or a combination of the pair*** via enclosing words in asterisks. These clever bindings just place the appropriate number thereof around the word in which your cursor is currently resting or around your selection.
 
 ### Go to top (ctrl+up) or bottom (ctrl+down)—think about it and you'll realize that this is more interesting than you first thought.
-By design, Journal places your cursor on the first line after any frontmatter. These bindings can move it either to the very top of the document or (probably more usefully) to its last line, so you can pick up where you left off.
+By design, Folio places your cursor on the first line after any frontmatter. These bindings can move it either to the very top of the document or (probably more usefully) to its last line, so you can pick up where you left off.
 
 ### Toggle word and paragraph count (ctrl+w)—downright fascinating is what it is.
 Word counts are a necessary evil (maybe), but they do prompt some really poor behavior from bad writers who need to hit them. Sometimes, though, it's helpful to measure the number of rounded, complete, coherent sets of thought you've produced. The paragraph count is your tool for that latter, more noble goal. You can also toggle this off, if you're the sort of writer who defies measurement of your process.
 
 ### Find and/or replace (ctrl+f)—this placement was less about how interesting it is in principle and more about how hard it was to theorize and implement.
-Journal offers (if I may say so myself) a relatively robust find and replace feature. Ctrl+f summons a panel in which you may type a particular word. At that point, you have a choice. Enter will send you into the editor pane and highlight the term you sought. You can cycle through results with ctrl+k (next) and ctrl+j (previous), and you can return to the find panel with ctrl+f, from which you can then also replace that word you sought or replace every instance of it in your document.
+Folio offers (if I may say so myself) a relatively robust find and replace feature. Ctrl+f summons a panel in which you may type a particular word. At that point, you have a choice. Enter will send you into the editor pane and highlight the term you sought. You can cycle through results with ctrl+k (next) and ctrl+j (previous), and you can return to the find panel with ctrl+f, from which you can then also replace that word you sought or replace every instance of it in your document.
 
 <img width="1280" height="400" alt="screenshot_20260228_143732" src="https://github.com/user-attachments/assets/e845b296-d1e1-40cf-8477-9d7716f59118" />
 
@@ -78,19 +78,19 @@ Spelling is hard (for most people...I hear), so hearing the cries of the masses 
 
 <img width="1280" height="400" alt="screenshot_20260228_143803" src="https://github.com/user-attachments/assets/62f04de2-db6d-40dd-86f2-2eaf594f82df" />
 
-### Return to Journal (esc)—the pressing twice thing makes this fascinating if you mull it over.
-If you press escape (twice to prevent accidental activation), you'll return to the Journal screen.
+### Return to Folio (esc)—the pressing twice thing makes this fascinating if you mull it over.
+If you press escape (twice to prevent accidental activation), you'll return to the Folio screen.
 
 ### Quit to CLI (ctrl+q)—how many times do you think I accidentally quit to CLI before I made this require a double press?
 Likewise, a double press of ctrl+q sends the user back to the command line.
 
-### Shut down (ctrl+s *from the Journal screen*)—for when you're done writing...or done with the task of writing.
-My writerdeck boots into the Journal screen, and often I spend all of my time with this device in this app. I wanted to be able to shut down without exiting to CLI, so I set up a double press of ctrl+s to do the job.
+### Shut down (ctrl+s *from the Folio screen*)—for when you're done writing...or done with the task of writing.
+My writerdeck boots into the Folio screen, and often I spend all of my time with this device in this app. I wanted to be able to shut down without exiting to CLI, so I set up a double press of ctrl+s to do the job.
 
 ### Insert blank footnote (ctrl+n)—footnotes are fascinating.
 The next two features are related. First, ctrl+n offers a quick and frictionless way to insert an inline markdown footnote (the correct kind of markdown footnote; do not @ me). Once you've done that, though, the real magic begins. 
 
-### Search for and insert citekey (ctrl+r)—this will revolutionize your academic writing once you figure out how to implement it. Even if you don't like Journal, you should get this into your workflow.
+### Search for and insert citekey (ctrl+r)—this will revolutionize your academic writing once you figure out how to implement it. Even if you don't like Folio, you should get this into your workflow.
 Ctrl+r will open a pop-up from which you can fuzzy search your .bib file in `~/Documents/sources/` (exported from a robust Zotero library, I'm guessing, you studious guy or gal, you) and insert a citekey at your cursor. That plus pandoc's --citeproc flag (more on that below) revolutionized citation workflow for me. You have got to try it.
 
 <img width="1280" height="400" alt="screenshot_20260228_143822" src="https://github.com/user-attachments/assets/452e05be-51fa-4e33-9870-6b809e54eaf7" />
