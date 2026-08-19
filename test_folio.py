@@ -1202,16 +1202,19 @@ def test_config_migrates_from_journal():
     # A device configured before the rename must not be treated as a
     # fresh install: that creates an empty vault beside the real one and
     # the writer has no way to know their work is still on disk.
-    with _as_home() as home:
-        old = home / ".config" / "journal" / "config.json"
-        old.parent.mkdir(parents=True)
+    with _as_home():
+        # Ask the code where the files belong rather than assuming the
+        # POSIX layout: on Windows these are under %APPDATA%, and
+        # hardcoding ~/.config made this pass on a Mac and fail there.
+        old = _legacy_config_path()
+        old.parent.mkdir(parents=True, exist_ok=True)
         old.write_text('{"vault": "/home/x/Documents", "pdf_engine": "typst"}',
                        encoding="utf-8")
         cfg = _load_config()
         assert cfg["vault"] == "/home/x/Documents", cfg
         assert cfg["pdf_engine"] == "typst", cfg
 
-        new = home / ".config" / "folio" / "config.json"
+        new = _config_path()
         assert new.is_file(), "config was read but not migrated"
         # The old file is never touched, so an older build still finds
         # its configuration if this device rolls back.
@@ -1226,13 +1229,14 @@ def test_config_migrates_from_journal():
 def test_config_survives_an_unwritable_new_location():
     # If the copy cannot be written, the old file is still read directly
     # rather than the device silently reverting to a first run.
-    with _as_home() as home:
-        old = home / ".config" / "journal" / "config.json"
-        old.parent.mkdir(parents=True)
+    with _as_home():
+        old = _legacy_config_path()
+        old.parent.mkdir(parents=True, exist_ok=True)
         old.write_text('{"vault": "/home/x/Documents"}', encoding="utf-8")
-        # A file where the new directory needs to be: mkdir will fail.
-        (home / ".config" / "folio").write_text("not a directory",
-                                                encoding="utf-8")
+        # A file where the new directory needs to be, so mkdir fails.
+        target = _config_path().parent
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("not a directory", encoding="utf-8")
         assert _load_config()["vault"] == "/home/x/Documents"
     print("  Config survives an unwritable target OK")
 
