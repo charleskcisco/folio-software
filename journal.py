@@ -3986,7 +3986,7 @@ def create_app(storage):
         return shutil.get_terminal_size().columns < _NARROW_COLS
 
     def _get_title_hints():
-        return [("class:title bold", " Journal")]
+        return [("class:title bold", " Folio")]
 
     def _get_shutdown_hint():
         now = time.monotonic()
@@ -4039,7 +4039,7 @@ def create_app(storage):
     # ── Narrow (Manuscripts-style) browser/exports chrome ────────────
 
     def _get_narrow_title():
-        return [("class:title bold", " Journal")]
+        return [("class:title bold", " Folio")]
 
     def _get_narrow_exports_title():
         return [("class:title bold", " Exports")]
@@ -4645,13 +4645,13 @@ def create_app(storage):
     ])
 
     _KB_ALL = [
-        ("esc", "Journal"), ("^p", "Commands"), ("^q", "Quit"), ("^s", "Save"),
+        ("esc", "Folio"), ("^p", "Commands"), ("^q", "Quit"), ("^s", "Save"),
         ("^b", "Bold"), ("^i", "Italic"), ("^n", "Footnote"), ("^r", "Cite"),
         ("^f", "Find/Replace"), ("^o", "Outline"), ("^z", "Undo"),
         ("^y", "Redo"),
     ]
     _KB_SECTIONS = [
-        [("esc", "Journal"),
+        [("esc", "Folio"),
          ("^p", "Commands"), ("^q", "Quit"), ("^s", "Save")],
         [("^b", "Bold"), ("^i", "Italic"), ("^n", "Footnote"),
          ("^r", "Cite"), ("^f", "Find/Replace")],
@@ -5836,7 +5836,7 @@ def create_app(storage):
             ("font",
              f"Font size: {font if font is not None else 'default'}"
              "  (applies on restart)"),
-            (None, "Journal"),
+            (None, "Folio"),
             ("vault", f"Vault: {state.storage.vault_dir}"),
             ("folders",
              f"Show folder names: {'on' if state.show_folders else 'off'}"),
@@ -6201,7 +6201,7 @@ def create_app(storage):
                         state, "Update check failed (offline, or not a"
                         " git checkout).")
                 else:
-                    show_notification(state, "Journal is up to date.")
+                    show_notification(state, "Folio is up to date.")
                 get_app().invalidate()
 
             state.update_check_task = asyncio.ensure_future(_check())
