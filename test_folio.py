@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests for journal data models, .bib parsing, and export helpers.
+Tests for Folio data models, .bib parsing, and export helpers.
 """
 
 import os
@@ -12,8 +12,8 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
-import journal
-from journal import (
+import folio
+from folio import (
     Entry, BibEntry, VaultStorage, fuzzy_filter, fuzzy_filter_entries,
     parse_bib_lightweight, _find_bib_file, _load_bib_entries,
     parse_yaml_frontmatter, resolve_reference_doc,
@@ -231,13 +231,13 @@ def test_parse_yaml_frontmatter():
 
 def test_resolve_reference_doc():
     with tempfile.TemporaryDirectory() as tmpdir:
-        import journal
-        orig_refs = journal._REFS_DIR
+        import folio
+        orig_refs = folio._REFS_DIR
 
         # Create a fake refs dir
         fake_refs = Path(tmpdir) / "refs"
         fake_refs.mkdir()
-        journal._REFS_DIR = fake_refs
+        folio._REFS_DIR = fake_refs
 
         try:
             # No docs at all
@@ -264,7 +264,7 @@ def test_resolve_reference_doc():
             assert result.name == "double.docx"
             print("  Missing explicit spacing fallback OK")
         finally:
-            journal._REFS_DIR = orig_refs
+            folio._REFS_DIR = orig_refs
 
 
 def test_lua_filter_generation():
@@ -343,7 +343,7 @@ def test_typst_wrapper():
          "instructor": "I", "date": "2026-01-05", "style": "mla",
          "spacing": "single"}
     src = _typst_wrapper(y, "body.typ")
-    assert '#import "journal.typ": conf' in src
+    assert '#import "folio.typ": conf' in src
     assert '#show: conf.with(' in src
     assert '#include "body.typ"' in src
     assert 'title: "T",' in src
@@ -370,18 +370,18 @@ def test_typst_wrapper():
 def test_typst_template_exists():
     # The wrapper imports this by name; a rename would only surface at
     # export time otherwise.
-    assert (_TEMPLATES_DIR / "journal.typ").is_file()
+    assert (_TEMPLATES_DIR / "folio.typ").is_file()
     print("  Typst template present OK")
 
 
 def test_template_selection():
     # style: is the single key. No style -- or no frontmatter at all --
-    # is journal.typ, the docx-derived template, which is Turabian minus
+    # is folio.typ, the docx-derived template, which is Turabian minus
     # the cover page.
-    assert _template_name({}) == _DEFAULT_TEMPLATE == "journal.typ"
-    assert _template_name({"style": ""}) == "journal.typ"
-    assert _template_name({"style": None}) == "journal.typ"
-    assert _template_name({"title": "no style key"}) == "journal.typ"
+    assert _template_name({}) == _DEFAULT_TEMPLATE == "folio.typ"
+    assert _template_name({"style": ""}) == "folio.typ"
+    assert _template_name({"style": None}) == "folio.typ"
+    assert _template_name({"title": "no style key"}) == "folio.typ"
 
     # The two style-guide templates, tolerant of case and whitespace.
     assert _template_name({"style": "mla"}) == "mla.typ"
@@ -390,23 +390,23 @@ def test_template_selection():
     assert _template_name({"style": "turabian"}) == "turabian.typ"
 
     # A typo must not cost a student their export.
-    assert _template_name({"style": "mla-9"}) == "journal.typ"
+    assert _template_name({"style": "mla-9"}) == "folio.typ"
 
     # template: was the old key and is gone; it must not still work.
-    assert _template_name({"template": "mla"}) == "journal.typ"
+    assert _template_name({"template": "mla"}) == "folio.typ"
     print("  Template selection OK")
 
 
 def test_new_templates_exist():
     # Selected by name at export time, so a rename or a missing file only
     # surfaces when a student presses export.
-    for name in ("journal.typ", "mla.typ", "turabian.typ"):
+    for name in ("folio.typ", "mla.typ", "turabian.typ"):
         assert (_TEMPLATES_DIR / name).is_file(), name
     print("  Style-guide templates present OK")
 
 
 def test_new_templates_expose_conf():
-    # _typst_wrapper emits `#import "journal.typ": conf` against whichever
+    # _typst_wrapper emits `#import "folio.typ": conf` against whichever
     # file was copied in, so every template must expose conf() with the
     # same parameters or the wrapper fails to compile.
     required = ("title", "author", "course", "instructor", "date",
@@ -433,33 +433,33 @@ def test_mla_date_keys_off_style():
     print("  MLA date keys off style OK")
 
 
-def test_journal_template_untouched_by_new_ones():
+def test_folio_template_untouched_by_new_ones():
     # The docx-derived template is the reference the LibreOffice chain is
     # compared against. If MLA fixes ever get applied to it by mistake,
     # that comparison silently stops meaning anything -- so pin the two
     # properties that make it docx-derived rather than style-guide-derived.
-    src = (_TEMPLATES_DIR / "journal.typ").read_text(encoding="utf-8")
+    src = (_TEMPLATES_DIR / "folio.typ").read_text(encoding="utf-8")
     # What actually separates the docx-derived template from the
     # style-guide ones: a paragraph gap and the docx top margin. MLA has
     # neither.
     #
     # Note this does NOT include the first-line indent. An earlier version
-    # of this test asserted journal.typ had none, which pinned a bug in
+    # of this test asserted folio.typ had none, which pinned a bug in
     # place: refs/*.docx carries w:ind w:firstLine="720" and the template
     # had simply never transcribed it, so the two engines wrapped their
     # lines in different places. Both templates indent; they differ on
     # margin and paragraph gap.
-    assert "para-extra" in src, "journal.typ lost its docx paragraph gap"
-    assert "1.531in" in src, "journal.typ lost its docx top margin"
+    assert "para-extra" in src, "folio.typ lost its docx paragraph gap"
+    assert "1.531in" in src, "folio.typ lost its docx top margin"
     mla = (_TEMPLATES_DIR / "mla.typ").read_text(encoding="utf-8")
     assert "para-extra" not in mla, "mla.typ gained a docx paragraph gap"
     assert "1.531in" not in mla, "mla.typ gained the docx top margin"
-    print("  journal.typ still docx-derived OK")
+    print("  folio.typ still docx-derived OK")
 
 
 def test_first_line_indent_matches_reference_docx():
     # refs/*.docx sets w:ind w:firstLine="720" on BodyText -- half an inch
-    # on every paragraph. journal.typ exists to mirror those documents, so
+    # on every paragraph. folio.typ exists to mirror those documents, so
     # if one grows an indent the other has to have it too.
     import zipfile, re as _re
     for ref in ("double.docx", "single.docx"):
@@ -468,7 +468,7 @@ def test_first_line_indent_matches_reference_docx():
         m = _re.search(
             r'<w:style [^>]*w:styleId="BodyText".*?</w:style>', xml, _re.S)
         assert m and 'w:firstLine="720"' in m.group(0), ref
-    src = (_TEMPLATES_DIR / "journal.typ").read_text(encoding="utf-8")
+    src = (_TEMPLATES_DIR / "folio.typ").read_text(encoding="utf-8")
     assert "first-line-indent" in src and "0.5in" in src
     print("  First-line indent matches reference docx OK")
 
@@ -479,7 +479,7 @@ def test_line_box_pinned_explicitly():
     # constants are derived against. Using the keyword silently shrinks
     # the line box to 0.907em and puts double spacing at 2.10em where
     # LibreOffice renders 2.30em. Every template must pin it by length.
-    for name in ("journal.typ", "mla.typ", "turabian.typ"):
+    for name in ("folio.typ", "mla.typ", "turabian.typ"):
         src = (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
         assert 'top-edge: "ascender"' not in src, name
         assert 'bottom-edge: "descender"' not in src, name
@@ -489,8 +489,8 @@ def test_line_box_pinned_explicitly():
     print("  Line box pinned by length OK")
 
 
-def test_journal_typ_has_no_style_branches():
-    # journal.typ is now reached only by notes with no style: or an
+def test_folio_typ_has_no_style_branches():
+    # folio.typ is now reached only by notes with no style: or an
     # unrecognised one -- mla and chicago have templates of their own. It
     # therefore renders its front matter unconditionally, and carries no
     # running head or footer, both of which belonged to those styles.
@@ -499,12 +499,12 @@ def test_journal_typ_has_no_style_branches():
     # on `style == "" or style == "basic"`, so a note whose style: was a
     # typo fell back to this template and then silently lost its title,
     # author and date.
-    src = (_TEMPLATES_DIR / "journal.typ").read_text(encoding="utf-8")
+    src = (_TEMPLATES_DIR / "folio.typ").read_text(encoding="utf-8")
     code = "\n".join(l for l in src.splitlines()
                      if not l.lstrip().startswith("//"))
-    assert "style ==" not in code, "journal.typ regained a style branch"
-    assert "header:" not in code, "journal.typ regained a running head"
-    assert "footer:" not in code, "journal.typ regained a footer"
+    assert "style ==" not in code, "folio.typ regained a style branch"
+    assert "header:" not in code, "folio.typ regained a running head"
+    assert "footer:" not in code, "folio.typ regained a footer"
 
     # The parameter itself has to stay: _typst_wrapper passes the same
     # arguments to every template, so dropping it breaks the import.
@@ -512,7 +512,7 @@ def test_journal_typ_has_no_style_branches():
     for param in ("title", "author", "course", "instructor", "date",
                   "spacing", "lastname"):
         assert f"{param}:" in code, param
-    print("  journal.typ is the unstyled template OK")
+    print("  folio.typ is the unstyled template OK")
 
 
 def test_default_csl_by_style():
@@ -811,7 +811,7 @@ def test_typst_writer_disables_native_citations():
     # export must ask for citeproc's rendered text instead. Whether a
     # given pandoc does this by default varies by version; 3.1.11.1 on a
     # writerdeck does, 3.10 does not, and the export cannot depend on it.
-    src = (Path(__file__).parent / "journal.py").read_text(encoding="utf-8")
+    src = (Path(__file__).parent / "folio.py").read_text(encoding="utf-8")
     assert '"--to", "typst-citations"' in src, "typst writer may emit #cite()"
     assert '"--to", "typst",' not in src, "a bare typst writer target remains"
     print("  Typst native citations disabled OK")
@@ -870,7 +870,7 @@ def test_templates_name_the_bundled_face_first():
     # First in the list is the one guaranteed to resolve. If a system
     # face were listed ahead of it, output would differ per machine --
     # which is the problem the bundle exists to remove.
-    for name in ("journal.typ", "mla.typ", "turabian.typ"):
+    for name in ("folio.typ", "mla.typ", "turabian.typ"):
         src = (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
         i = src.index("#let body-fonts = (")
         head = src[i:i + 120]
@@ -896,7 +896,7 @@ def test_rts_is_bound_before_it_is_read():
     # create_app and no test can run it. Until that changes, bugs on
     # that path are found by exporting, not by this file.
     import ast
-    src = (Path(__file__).parent / "journal.py").read_text(encoding="utf-8")
+    src = (Path(__file__).parent / "folio.py").read_text(encoding="utf-8")
     for fn in ast.walk(ast.parse(src)):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -1049,7 +1049,7 @@ def test_initial_pdf_engine():
     # Devices already in the field must not have their export engine
     # swapped by an update. Some of them belong to people we cannot
     # reach, so a silent switch is a device that simply stops working.
-    import journal as J
+    import folio as J
     with tempfile.TemporaryDirectory() as tmpdir:
         cfgp = Path(tmpdir) / "config.json"
         orig = J._config_path
@@ -1373,7 +1373,7 @@ def test_powershell_paste_command():
     # Both halves matter and neither is obvious, so pin them: -Raw keeps
     # the clipboard as one string instead of an array of lines, and the
     # UTF-8 line stops the console codepage mangling curly quotes.
-    joined = " ".join(journal._PS_PASTE)
+    joined = " ".join(folio._PS_PASTE)
     assert "-Raw" in joined
     assert "UTF8" in joined
     assert "-NoProfile" in joined
@@ -1474,7 +1474,7 @@ def test_no_default_encoding_io():
     # A regression guard for the whole class: any text I/O without an
     # explicit encoding is locale-dependent, and the locale is only
     # UTF-8 on the machines we happen to develop on.
-    src = (Path(__file__).parent / "journal.py").read_text(encoding="utf-8")
+    src = (Path(__file__).parent / "folio.py").read_text(encoding="utf-8")
     offenders = []
     for i, line in enumerate(src.splitlines(), 1):
         stripped = line.strip()
@@ -1658,7 +1658,7 @@ def test_detect_printers():
             self.returncode = rc
             self.stdout = out
 
-    orig = journal.subprocess.run
+    orig = folio.subprocess.run
 
     def via_e(args, **kw):
         if args[:2] == ["lpstat", "-e"]:
@@ -1674,14 +1674,14 @@ def test_detect_printers():
         return R(1, "")
 
     try:
-        journal.subprocess.run = via_e
-        assert journal._detect_printers() == ["P_One", "P_Two"]
-        journal.subprocess.run = via_a
-        assert journal._detect_printers() == ["HP"]
-        journal.subprocess.run = none
-        assert journal._detect_printers() == []
+        folio.subprocess.run = via_e
+        assert folio._detect_printers() == ["P_One", "P_Two"]
+        folio.subprocess.run = via_a
+        assert folio._detect_printers() == ["HP"]
+        folio.subprocess.run = none
+        assert folio._detect_printers() == []
     finally:
-        journal.subprocess.run = orig
+        folio.subprocess.run = orig
     print("  lpstat -e primary, -a fallback OK")
 
 
@@ -1718,8 +1718,8 @@ def test_markdown_lexer():
 
 
 def test_clipboard_paste_no_clobber():
-    orig_cmds = (journal._CLIP_COPY_CMD, journal._CLIP_PASTE_CMD)
-    orig_detect = journal._detect_clipboard
+    orig_cmds = (folio._CLIP_COPY_CMD, folio._CLIP_PASTE_CMD)
+    orig_detect = folio._detect_clipboard
     calls = {"detect": 0}
 
     def spy_detect():
@@ -1727,26 +1727,26 @@ def test_clipboard_paste_no_clobber():
         return (["false"], ["false"])
 
     try:
-        journal._detect_clipboard = spy_detect
+        folio._detect_clipboard = spy_detect
         # Paste cmd configured but failing: must NOT re-detect (the probe
         # writes "" to the clipboard and would wipe what we're reading).
-        journal._CLIP_COPY_CMD = ["false"]
-        journal._CLIP_PASTE_CMD = ["false"]
-        assert journal._clipboard_paste() is None
+        folio._CLIP_COPY_CMD = ["false"]
+        folio._CLIP_PASTE_CMD = ["false"]
+        assert folio._clipboard_paste() is None
         assert calls["detect"] == 0
         # No paste tool at all: nothing to clobber, re-detect once.
-        journal._CLIP_PASTE_CMD = None
-        journal._clipboard_paste()
+        folio._CLIP_PASTE_CMD = None
+        folio._clipboard_paste()
         assert calls["detect"] == 1
     finally:
-        journal._detect_clipboard = orig_detect
-        journal._CLIP_COPY_CMD, journal._CLIP_PASTE_CMD = orig_cmds
+        folio._detect_clipboard = orig_detect
+        folio._CLIP_COPY_CMD, folio._CLIP_PASTE_CMD = orig_cmds
     print("  Paste retry without clipboard clobber OK")
 
 
 def test_run_power():
-    import journal
-    real = journal.subprocess.Popen
+    import folio
+    real = folio.subprocess.Popen
     try:
         calls = []
         def fake(cmd, *a, **k):
@@ -1754,22 +1754,22 @@ def test_run_power():
             if cmd[0] == "/sbin/shutdown":   # simulate /sbin not on PATH
                 raise FileNotFoundError(2, "No such file", cmd[0])
             return object()
-        journal.subprocess.Popen = fake
-        assert journal._run_power(reboot=True) is True
+        folio.subprocess.Popen = fake
+        assert folio._run_power(reboot=True) is True
         assert calls[0][0] == "/sbin/shutdown"          # tried first
         assert calls[1][0] == "/usr/sbin/shutdown"      # fell through
         assert "-r" in calls[1]                         # reboot flag
         # All candidates missing -> False, no exception
-        journal.subprocess.Popen = lambda cmd, *a, **k: (
+        folio.subprocess.Popen = lambda cmd, *a, **k: (
             _ for _ in ()).throw(FileNotFoundError(2, "x", cmd[0]))
-        assert journal._run_power() is False
+        assert folio._run_power() is False
     finally:
-        journal.subprocess.Popen = real
+        folio.subprocess.Popen = real
     print("  Power command fallback OK")
 
 
 def test_extract_headings():
-    from journal import _extract_headings
+    from folio import _extract_headings
     t = ("# Title\n\nintro\n\n## Section A\nbody\n\n"
          "```\n# not a heading\n```\n\n### Sub B\nx\n## Section C\n")
     h = _extract_headings(t)
@@ -1784,7 +1784,7 @@ def test_extract_headings():
 
 
 def test_nmcli_parse():
-    from journal import (_parse_nmcli_terse, _parse_wifi_list,
+    from folio import (_parse_nmcli_terse, _parse_wifi_list,
                          _wifi_signal_bars)
     # Escaped colon in an SSID survives the terse split
     assert _parse_nmcli_terse(r"*:My\:SSID:WPA2:72") == \
@@ -1958,10 +1958,10 @@ if __name__ == "__main__":
     test_strip_bib_noise_leaves_unterminated_fields_alone()
     test_bib_value_end_forms()
     test_bib_openers_is_independent_of_block_parsing()
-    test_journal_template_untouched_by_new_ones()
+    test_folio_template_untouched_by_new_ones()
     test_line_box_pinned_explicitly()
     test_first_line_indent_matches_reference_docx()
-    test_journal_typ_has_no_style_branches()
+    test_folio_typ_has_no_style_branches()
     print("  \u2713 Typst export tests passed\n")
 
     print("Testing tool detection...")

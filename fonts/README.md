@@ -33,6 +33,6 @@ Sans Math covers mathematical and logical operators the serif does not.
 It is **not** Times-metric — narrower, being SemiCondensed. Vertical
 spacing is unaffected, because the templates pin the line box with
 explicit lengths rather than the font's own ascender and descender. Line
-breaks and page counts do move, and `journal.typ` no longer matches the
+breaks and page counts do move, and `folio.typ` no longer matches the
 LibreOffice render as a result. That parity was deliberately traded for
 output that is identical everywhere.

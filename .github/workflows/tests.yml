@@ -17,7 +17,7 @@ jobs:
 
     env:
       # The inline `shell: python` steps run from a temp file, so the
-      # checkout is not on sys.path and `import journal` fails.
+      # checkout is not on sys.path and `import folio` fails.
       PYTHONPATH: ${{ github.workspace }}
 
       # Console encoding only. Windows defaults stdout to cp1252, so the
@@ -49,15 +49,15 @@ jobs:
       # The import alone is a real test on Windows: it is where a missing
       # termios guard or a module-level POSIX call takes the app down
       # before it can draw a frame.
-      - name: Import journal
-        run: python -c "import journal; print('import OK')"
+      - name: Import folio
+        run: python -c "import folio; print('import OK')"
 
       # -X warn_default_encoding turns locale-dependent text I/O into a
       # visible warning, and -W error promotes it to a failure. This is
       # the guard that would have caught the cp1252 export bug the day it
       # was written rather than on a student's laptop.
       - name: Run test suite
-        run: python -X warn_default_encoding -W error::EncodingWarning test_journal.py
+        run: python -X warn_default_encoding -W error::EncodingWarning test_folio.py
 
       # A first run has no config and must not stop to ask a question --
       # it should create its own vault and be ready to open it. Uses a
@@ -70,13 +70,13 @@ jobs:
               os.environ["HOME"] = home              # POSIX
               os.environ["USERPROFILE"] = home       # Windows
               os.environ["APPDATA"] = str(pathlib.Path(home) / "AppData" / "Roaming")
-              import journal
-              vault = journal._default_vault()
+              import folio
+              vault = folio._default_vault()
               assert str(vault).startswith(home), (vault, home)
               vault.mkdir(parents=True, exist_ok=True)
-              journal._save_config({"vault": str(vault)})
-              assert journal._load_config()["vault"] == str(vault)
-              assert journal._config_path().exists(), journal._config_path()
+              folio._save_config({"vault": str(vault)})
+              assert folio._load_config()["vault"] == str(vault)
+              assert folio._config_path().exists(), folio._config_path()
               print("first-run OK ->", vault)
 
       # The bug this exists to catch: a note title with a colon in it is
@@ -85,9 +85,9 @@ jobs:
         shell: python
         run: |
           import tempfile, pathlib
-          import journal
+          import folio
           with tempfile.TemporaryDirectory() as td:
-              storage = journal.VaultStorage(pathlib.Path(td))
+              storage = folio.VaultStorage(pathlib.Path(td))
               for title in ("Chapter 1: The Beginning", "What? Why!", "NUL", "draft."):
                   entry = storage.create_entry(title)
                   assert entry.path.exists(), title

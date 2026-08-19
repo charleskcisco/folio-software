@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# journal launcher — uses venv with prompt_toolkit.
+# Folio launcher — uses venv with prompt_toolkit.
 #
 # Usage:
 #   ./run.sh                    # normal run
-#   JOURNAL_VAULT=~/notes ./run.sh   # custom vault directory
+#   FOLIO_VAULT=~/notes ./run.sh     # custom vault directory
 #
 # Self-update: the app exits with code 42 when the user chooses to update
 # (^u). This launcher loop then pulls the latest code, reinstalls
@@ -19,7 +19,7 @@ else
 fi
 
 while true; do
-    "$PY" "${SCRIPT_DIR}/journal.py" "$@"
+    "$PY" "${SCRIPT_DIR}/folio.py" "$@"
     code=$?
 
     if [ "$code" -eq 43 ]; then
@@ -31,12 +31,20 @@ while true; do
     fi
 
     # Update requested.
-    echo "Updating Journal…"
+    echo "Updating Folio…"
     if git -C "$SCRIPT_DIR" pull --ff-only; then
         "${SCRIPT_DIR}/setup.sh" || echo "Dependency update failed; continuing with current deps."
     else
         echo "Update failed (git pull). Continuing with the current version."
         sleep 2
     fi
-    # Loop back and relaunch the (now updated) app.
+    # exec a fresh launcher rather than looping.
+    #
+    # git pull has just rewritten this file underneath a running bash,
+    # which reads a script incrementally by byte offset -- so continuing
+    # the loop can resume at an offset that is now the middle of a
+    # different line. exec replaces the process and re-reads from the
+    # top, which is the only way to be sure the launcher that runs next
+    # is the launcher that is now on disk.
+    exec "${SCRIPT_DIR}/run.sh" "$@"
 done

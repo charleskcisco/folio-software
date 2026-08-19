@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Journal — A micro-journal companion for Obsidian vaults."""
+"""Folio — distraction-free Markdown composition for Obsidian vaults."""
 
 from __future__ import annotations
 
@@ -1162,7 +1162,7 @@ def _typst_str(s: str) -> str:
 # same key the docx path reads -- so a note declares its style once and
 # both engines honour it as far as each can.
 #
-# A note with no style: (or no frontmatter at all) gets journal.typ,
+# A note with no style: (or no frontmatter at all) gets folio.typ,
 # which is Turabian without the cover page: centred title, author and
 # date over a double-spaced body. That template is transcribed from
 # refs/*.docx and matches the LibreOffice render exactly, so an unstyled
@@ -1171,7 +1171,7 @@ def _typst_str(s: str) -> str:
 # mla and chicago route to templates written to the style guides
 # instead, which the docx chain cannot reproduce -- those notes are
 # deliberately no longer at parity.
-_DEFAULT_TEMPLATE = "journal.typ"
+_DEFAULT_TEMPLATE = "folio.typ"
 _TEMPLATES = {
     "mla": "mla.typ",
     "chicago": "turabian.typ",
@@ -1207,7 +1207,7 @@ def _typst_wrapper(yaml: dict, body_name: str) -> str:
     ]
     args = "".join(f"  {k}: {_typst_str(v)},\n" for k, v in fields)
     return (
-        '#import "journal.typ": conf\n'
+        '#import "folio.typ": conf\n'
         "#show: conf.with(\n"
         f"{args}"
         ")\n"
@@ -4009,7 +4009,7 @@ def create_app(storage):
     def _exports_action_hints():
         S = ("class:hint.sep", "  ·  ")
         return [
-            ("class:hint", " (/) search  (j) journal"), S,
+            ("class:hint", " (/) search  (j) folio"), S,
             ("class:hint", "(↵) print  (s) share  (d) delete"),
         ]
 
@@ -4067,7 +4067,7 @@ def create_app(storage):
         return hints
 
     def _get_narrow_exports_right_hints():
-        hints = [("class:hint", "(j) journal"), _sep(),
+        hints = [("class:hint", "(j) folio"), _sep(),
                  ("class:hint", "(^r) refresh"), _sep()]
         hints.extend(_get_shutdown_hint())
         return hints
@@ -4301,7 +4301,7 @@ def create_app(storage):
                     return
                 show_notification(
                     state, "Preparing document for printing…", duration=_PROGRESS_SHOWN)
-                tmp_dir = tempfile.mkdtemp(prefix="journal_print_")
+                tmp_dir = tempfile.mkdtemp(prefix="folio_print_")
                 lo_profile = Path(tmp_dir) / "loprofile"
                 lo_args = [
                     lo, f"-env:UserInstallation=file://{lo_profile}",
@@ -5021,7 +5021,7 @@ def create_app(storage):
             # iter_md_paths already skips dot-directories, so it never
             # shows up in the browser. Returns a vault-relative path.
             try:
-                log_dir = state.storage.vault_dir / ".journal"
+                log_dir = state.storage.vault_dir / ".folio"
                 log_dir.mkdir(parents=True, exist_ok=True)
                 log = log_dir / "export-error.log"
                 log.write_text(
@@ -5050,7 +5050,7 @@ def create_app(storage):
                 state, f"Export folder not writable: {_fmt_dest(export_dir)}")
             return
 
-        tmp_dir = tempfile.mkdtemp(prefix="journal_export_")
+        tmp_dir = tempfile.mkdtemp(prefix="folio_export_")
         md_path = Path(tmp_dir) / "source.md"
         lua_path = Path(tmp_dir) / "filter.lua"
         docx_path = export_dir / f"{safe_name}.docx" if export_format == "docx" else Path(tmp_dir) / f"{safe_name}.docx"
@@ -5183,7 +5183,7 @@ def create_app(storage):
                 # typst's default root confinement is satisfied without
                 # granting it access to the vault.
                 def _assemble():
-                    shutil.copy(template, Path(tmp_dir) / "journal.typ")
+                    shutil.copy(template, Path(tmp_dir) / "folio.typ")
                     (Path(tmp_dir) / "main.typ").write_text(
                         _typst_wrapper(yaml, "body.typ"), encoding="utf-8")
 
@@ -5675,7 +5675,7 @@ def create_app(storage):
             else:
                 state.escape_pending = now
                 show_notification(state,
-                                  "Press esc again to return to journal.",
+                                  "Press esc again to return to Folio.",
                                   duration=2.0)
         elif state.screen == "journal":
             if state.showing_exports:
@@ -6521,7 +6521,7 @@ def create_app(storage):
                     ("Insert citation", "^R", cmd_cite),
                     ("Keybindings", "^G", toggle_keybindings),
                     ("Markdown reference", "Syntax help", cmd_markdown_help),
-                    ("Return to journal", "Esc", return_to_journal),
+                    ("Return to Folio", "Esc", return_to_journal),
                     ("Save", "^S", lambda: do_save()),
                     ("Spell check", "Check spelling", cmd_spell_check),
                 ]
