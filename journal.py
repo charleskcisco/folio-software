@@ -428,7 +428,8 @@ def _bundled_bin(name: str) -> Optional[str]:
 
 def detect_pandoc() -> Optional[str]:
     """Find the pandoc binary."""
-    found = (_env_bin("JOURNAL_PANDOC") or _bundled_bin("pandoc")
+    found = (_env_bin("FOLIO_PANDOC") or _env_bin("JOURNAL_PANDOC")
+             or _bundled_bin("pandoc")
              or shutil.which("pandoc"))
     if found:
         return found
@@ -445,7 +446,8 @@ def detect_pandoc() -> Optional[str]:
 
 def detect_typst() -> Optional[str]:
     """Find the typst binary (PDF export engine)."""
-    found = (_env_bin("JOURNAL_TYPST") or _bundled_bin("typst")
+    found = (_env_bin("FOLIO_TYPST") or _env_bin("JOURNAL_TYPST")
+             or _bundled_bin("typst")
              or shutil.which("typst"))
     if found:
         return found
@@ -1217,14 +1219,14 @@ def _pdf_engine(yaml: dict, setting: str = "typst") -> str:
     """Which engine renders PDF for this note: "typst" or "libreoffice".
 
     Precedence, highest first:
-      1. JOURNAL_PDF_ENGINE, for scripted A/B comparison runs
+      1. FOLIO_PDF_ENGINE, for scripted A/B comparison runs
       2. a spacing: the Typst template cannot express -- those name a
          reference .docx (dg.double, quiz, ...), so only the LibreOffice
          chain can honour them and the note must keep its current output
       3. the Options setting
       4. typst by default, but never when its binary is missing
     """
-    env = os.environ.get("JOURNAL_PDF_ENGINE", "").strip()
+    env = _env("PDF_ENGINE").strip()
     if env in ("typst", "libreoffice"):
         return env
     spacing = yaml.get("spacing", "")
@@ -4902,7 +4904,7 @@ def create_app(storage):
         # ignore the return value.
         if not (_APP_DIR / ".git").is_dir():
             return None
-        if os.environ.get("JOURNAL_NO_UPDATE_CHECK"):
+        if _env("NO_UPDATE_CHECK"):
             return None
         loop = asyncio.get_running_loop()
 
@@ -5993,9 +5995,9 @@ def create_app(storage):
                         cfg = _load_config()
                         cfg["vault"] = str(p)
                         _save_config(cfg)
-                        if os.environ.get("JOURNAL_VAULT"):
+                        if _env("VAULT"):
                             show_notification(
-                                state, "Saved, but JOURNAL_VAULT overrides"
+                                state, "Saved, but FOLIO_VAULT overrides"
                                 " it — unset the env var.")
                             continue
                         # Relaunch through the run.sh loop (exit code 43)
@@ -6787,27 +6789,81 @@ def create_app(storage):
 # ════════════════════════════════════════════════════════════════════════
 
 
-def _config_path() -> Path:
-    """Where config.json lives, per platform.
+def _env(name: str, default: str = "") -> str:
+    """An app environment variable, honouring the pre-Folio spelling.
+
+    FOLIO_VAULT is the name now; JOURNAL_VAULT still works. These live
+    in people's shell profiles and launcher scripts, where a rename is a
+    silent breakage rather than an error -- the variable simply stops
+    being read and the app quietly does something else.
+    """
+    return (os.environ.get("FOLIO_" + name)
+            or os.environ.get("JOURNAL_" + name)
+            or default)
+
+
+def _config_root(name: str) -> Path:
+    """Per-platform config directory for an application name.
 
     Windows has no ~/.config convention; %APPDATA% is the per-user
-    application data location, and it roams with the profile. POSIX keeps
-    the path it has always used, so no existing writerdeck moves.
+    application data location, and it roams with the profile.
     """
     if sys.platform == "win32":
         base = os.environ.get("APPDATA")
         root = Path(base) if base else Path.home() / "AppData" / "Roaming"
-        return root / "journal" / "config.json"
-    return Path.home() / ".config" / "journal" / "config.json"
+        return root / name
+    return Path.home() / ".config" / name
+
+
+def _config_path() -> Path:
+    """Where config.json lives."""
+    return _config_root("folio") / "config.json"
+
+
+def _legacy_config_path() -> Path:
+    """Where it lived when the app was called Journal.
+
+    Read once, on the first run after the rename, and then left alone --
+    never written to, never deleted. A device that rolls back to an
+    older build finds its configuration exactly where it left it.
+    """
+    return _config_root("journal") / "config.json"
+
+
+def _migrate_config() -> None:
+    """Copy a pre-Folio config into place, once.
+
+    Renaming the config directory without this would silently orphan
+    every configured device: the app would find no config, decide it was
+    a fresh install, and create an empty vault beside the real one. The
+    writing would still be on disk, and the writer would have no way to
+    know that.
+
+    Best effort throughout. If the copy cannot be written, _load_config
+    still reads the old file, so the worst case is doing this again next
+    launch rather than losing anything.
+    """
+    new, old = _config_path(), _legacy_config_path()
+    try:
+        if new.exists() or not old.is_file():
+            return
+        new.parent.mkdir(parents=True, exist_ok=True)
+        new.write_text(old.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _load_config() -> dict:
-    p = _config_path()
-    if p.exists():
+    _migrate_config()
+    # The old path is still read directly, not just migrated from, so a
+    # config that could not be copied -- read-only home, full disk --
+    # keeps working rather than reverting the device to a first run.
+    for p in (_config_path(), _legacy_config_path()):
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            if p.exists():
+                return json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            pass
+            continue
     return {}
 
 
@@ -6828,8 +6884,8 @@ def _default_vault() -> Path:
 
 
 def main() -> None:
-    if os.environ.get("JOURNAL_VAULT"):
-        data_dir = Path(os.environ["JOURNAL_VAULT"])
+    if _env("VAULT"):
+        data_dir = Path(_env("VAULT"))
     else:
         cfg = _load_config()
         if cfg.get("vault"):
@@ -6840,7 +6896,7 @@ def main() -> None:
             # has -- it asks a question most users cannot answer, before
             # anything on screen has explained what a vault is. Anyone who
             # wants a different location can set it in Options afterwards,
-            # or point JOURNAL_VAULT at it.
+            # or point FOLIO_VAULT at it.
             data_dir = _default_vault()
             try:
                 data_dir.mkdir(parents=True, exist_ok=True)

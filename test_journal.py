@@ -27,6 +27,7 @@ from journal import (
     _get_foot_font_size, _set_foot_font_size, COLOR_SCHEMES,
     _env_bin, _config_path, _default_vault, _normalise_pasted,
     _detect_clipboard, _no_console, safe_entry_name, _ILLEGAL_CHARS,
+    _load_config, _env, _legacy_config_path,
     _template_name, _DEFAULT_TEMPLATE, _default_csl_path, _CSL_DIR,
     _column_widths, _cell_text_rows, _autofit_tables, _TEXT_WIDTH_TWIPS,
     _bib_blocks, _filter_bib, _cited_keys, _narrow_bib,
@@ -1165,15 +1166,91 @@ def test_env_bin_wins_in_detectors():
     print("  Sidecar override beats PATH OK")
 
 
+class _as_home:
+    """Run a block with HOME pointed at a temporary directory."""
+
+    def __enter__(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._saved = {k: os.environ.get(k)
+                       for k in ("HOME", "USERPROFILE", "APPDATA")}
+        home = Path(self._tmp.name)
+        os.environ["HOME"] = str(home)
+        os.environ["USERPROFILE"] = str(home)
+        os.environ["APPDATA"] = str(home / "AppData" / "Roaming")
+        return home
+
+    def __exit__(self, *exc):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self._tmp.cleanup()
+        return False
+
+
 def test_config_path():
     p = _config_path()
     assert p.name == "config.json"
-    assert p.parent.name == "journal"
-    # POSIX must keep the path every existing writerdeck already uses;
-    # moving it would strand their configured vault.
+    assert p.parent.name == "folio"
     if sys.platform != "win32":
-        assert p == Path.home() / ".config" / "journal" / "config.json"
+        assert p == Path.home() / ".config" / "folio" / "config.json"
     print("  Config path OK")
+
+
+def test_config_migrates_from_journal():
+    # A device configured before the rename must not be treated as a
+    # fresh install: that creates an empty vault beside the real one and
+    # the writer has no way to know their work is still on disk.
+    with _as_home() as home:
+        old = home / ".config" / "journal" / "config.json"
+        old.parent.mkdir(parents=True)
+        old.write_text('{"vault": "/home/x/Documents", "pdf_engine": "typst"}',
+                       encoding="utf-8")
+        cfg = _load_config()
+        assert cfg["vault"] == "/home/x/Documents", cfg
+        assert cfg["pdf_engine"] == "typst", cfg
+
+        new = home / ".config" / "folio" / "config.json"
+        assert new.is_file(), "config was read but not migrated"
+        # The old file is never touched, so an older build still finds
+        # its configuration if this device rolls back.
+        assert old.is_file(), "the pre-rename config was removed"
+
+        # Second launch reads the new file, not the old one.
+        new.write_text('{"vault": "/changed"}', encoding="utf-8")
+        assert _load_config()["vault"] == "/changed"
+    print("  Config migration from journal OK")
+
+
+def test_config_survives_an_unwritable_new_location():
+    # If the copy cannot be written, the old file is still read directly
+    # rather than the device silently reverting to a first run.
+    with _as_home() as home:
+        old = home / ".config" / "journal" / "config.json"
+        old.parent.mkdir(parents=True)
+        old.write_text('{"vault": "/home/x/Documents"}', encoding="utf-8")
+        # A file where the new directory needs to be: mkdir will fail.
+        (home / ".config" / "folio").write_text("not a directory",
+                                                encoding="utf-8")
+        assert _load_config()["vault"] == "/home/x/Documents"
+    print("  Config survives an unwritable target OK")
+
+
+def test_env_accepts_both_spellings():
+    # FOLIO_* is the name now, JOURNAL_* still works. These live in shell
+    # profiles and launcher scripts, where a rename is silent: the
+    # variable simply stops being read.
+    for k in ("FOLIO_VAULT", "JOURNAL_VAULT"):
+        os.environ.pop(k, None)
+    assert _env("VAULT") == ""
+    os.environ["JOURNAL_VAULT"] = "/old"
+    assert _env("VAULT") == "/old"
+    os.environ["FOLIO_VAULT"] = "/new"
+    assert _env("VAULT") == "/new", "the new spelling must win"
+    for k in ("FOLIO_VAULT", "JOURNAL_VAULT"):
+        os.environ.pop(k, None)
+    print("  Env var spellings OK")
 
 
 def test_default_vault():
@@ -1256,7 +1333,7 @@ class _as_platform:
 def test_config_path_windows():
     with _as_platform("win32", APPDATA=r"C:\Users\Kid\AppData\Roaming"):
         p = _config_path()
-        assert p.parts[-2:] == ("journal", "config.json"), p
+        assert p.parts[-2:] == ("folio", "config.json"), p
         assert "Roaming" in str(p), p
 
     # A missing APPDATA must not put config in ~/.config on Windows or
@@ -1895,6 +1972,9 @@ if __name__ == "__main__":
     test_env_bin()
     test_env_bin_wins_in_detectors()
     test_config_path()
+    test_config_migrates_from_journal()
+    test_config_survives_an_unwritable_new_location()
+    test_env_accepts_both_spellings()
     test_default_vault()
     test_normalise_pasted()
     test_no_console()
