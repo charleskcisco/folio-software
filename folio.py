@@ -4143,6 +4143,11 @@ def create_app(storage):
             buffer=preview_buffer,
             input_processors=[WordWrapProcessor()],
             focusable=False,
+            # The same lexer the editor uses, so a preview looks like what
+            # opening the entry will show. The pane's own dim style still
+            # applies to body text -- it is a preview, not the document --
+            # while headings, emphasis and markers keep their colours.
+            lexer=MarkdownLexer(),
         ),
         wrap_lines=True,
         style="class:preview",
