@@ -29,6 +29,7 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.layout.containers import (
     ConditionalContainer, DynamicContainer, Float, FloatContainer,
     HSplit, VSplit, Window, WindowAlign,
@@ -2084,12 +2085,20 @@ class ActiveHighlightProcessor(Processor):
 # ════════════════════════════════════════════════════════════════════════
 
 
+# A click counts as a double-click if it lands on the same row this soon
+# after the previous one. Three rows a notch is the usual wheel feel.
+_DOUBLE_CLICK_SECS = 0.4
+_SCROLL_ROWS = 3
+
+
 class SelectableList:
     """Navigable list widget. Items are (id, label) pairs."""
 
     def __init__(self, on_select=None):
         self.items = []
         self.selected_index = 0
+        self._last_click_index = -1
+        self._last_click_time = 0.0
         self.on_select = on_select
         self.on_navigate = None
         self._kb = KeyBindings()
@@ -2162,6 +2171,67 @@ class SelectableList:
             i += step
         return None
 
+    def _step(self, delta):
+        """Move the selection by delta rows, skipping section headers."""
+        if not self.items:
+            return
+        target = min(max(self.selected_index + delta, 0), len(self.items) - 1)
+        forward = 1 if delta > 0 else -1
+        j = self._scan(target, forward)
+        if j is None:
+            j = self._scan(target, -forward)
+        if j is not None and j != self.selected_index:
+            self.selected_index = j
+            if self.on_navigate:
+                self.on_navigate()
+
+    def _mouse_handler(self, index):
+        """Wheel scrolls, a click selects, a double-click opens.
+
+        The wheel moves the selection rather than the viewport. In this
+        app the selection is what drives the preview pane, so scrolling
+        the view alone would leave the two showing different entries --
+        and prompt_toolkit would scroll back to the cursor on the next
+        render anyway.
+
+        prompt_toolkit has no double-click event, so it is timed here.
+
+        None of this is reachable on the deck, which has no pointer and
+        runs with mouse support off; the handlers are simply never called.
+        """
+        def handle(mouse_event):
+            if mouse_event.event_type == MouseEventType.SCROLL_UP:
+                self._step(-_SCROLL_ROWS)
+                return None
+            if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+                self._step(_SCROLL_ROWS)
+                return None
+            if mouse_event.event_type != MouseEventType.MOUSE_UP:
+                return NotImplemented
+            if index >= len(self.items) or self.items[index][0] is None:
+                return None
+
+            now = time.monotonic()
+            same_row = index == self._last_click_index
+            double = same_row and (now - self._last_click_time) < _DOUBLE_CLICK_SECS
+            self._last_click_index, self._last_click_time = index, now
+
+            if self.selected_index != index:
+                self.selected_index = index
+                if self.on_navigate:
+                    self.on_navigate()
+            # Clicking a row should also hand it the keyboard, or the
+            # arrows carry on driving whatever had focus before.
+            try:
+                get_app().layout.focus(self.control)
+            except ValueError:
+                pass
+            if double and self.on_select:
+                self.on_select(self.items[index][0])
+            return None
+
+        return handle
+
     def snap(self):
         """Move the selection onto a selectable row (e.g. off a header
         it may have landed on)."""
@@ -2180,7 +2250,10 @@ class SelectableList:
             iid, label = item[0], item[1]
             if iid is None:   # section header: dim, non-selectable
                 prefix = "" if i == 0 else "\n"
-                result.append(("class:form-label bold", f"{prefix} {label}\n"))
+                # Handler attached even here, so the wheel keeps working
+                # when the pointer happens to rest on a header.
+                result.append(("class:form-label bold", f"{prefix} {label}\n",
+                               self._mouse_handler(i)))
                 continue
             right = item[2] if len(item) > 2 else ""
             style = "class:select-list.selected" if i == self.selected_index else ""
@@ -2194,7 +2267,7 @@ class SelectableList:
                 line = f"{left}  {right}\n"
             else:
                 line = f"{left}\n"
-            result.append((style, line))
+            result.append((style, line, self._mouse_handler(i)))
         return result
 
     def set_items(self, items):
@@ -6792,7 +6865,12 @@ def create_app(storage):
         key_bindings=kb,
         style=style,
         full_screen=True,
-        mouse_support=False,
+        # Off on the deck, which has no pointer, and on in the wrapper,
+        # where a wheel over the preview pane should scroll it. Enabling
+        # it makes the terminal hand mouse events to the application
+        # instead of doing its own selection, which is why the wrapper
+        # turns on Option-drag to select (see main.ts).
+        mouse_support=_is_desktop(),
         # Bar/beam cursor instead of a block: prompt_toolkit's cursor sits
         # *between* characters, so a block drawn on top of a glyph is
         # misleading (e.g. shift+left wouldn't include the "covered" char).

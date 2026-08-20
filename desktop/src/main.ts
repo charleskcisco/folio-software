@@ -25,6 +25,10 @@ const term = new Terminal({
   fontSize: FONT_SIZE,
   lineHeight: 1.25,
   cursorBlink: true,
+  // Folio takes mouse events in the wrapper (to scroll the preview pane),
+  // which stops the terminal doing its own selection. This restores it:
+  // hold Option and drag to select text for copying.
+  macOptionClickForcesSelection: true,
   // The wrapper owns the whole window; nothing else is competing for it.
   scrollback: 0,
   // Folio's own dark theme, matched exactly (folio.py's style table:
