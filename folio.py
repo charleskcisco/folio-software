@@ -3471,6 +3471,15 @@ class FindReplacePanel:
             self.replace_all_window,
             Window(height=1),
             Window(FormattedTextControl(get_hints), height=5),
+            # Flexible filler, and not decoration: every other child here
+            # has a fixed height, so without this the panel's maximum
+            # height is the sum of its parts. It sits in a VSplit beside
+            # the editor, all of whose children share one height, so that
+            # ceiling became the whole body's ceiling -- opening find
+            # collapsed the UI to twelve rows and blanked everything
+            # below, status bar included. The spell panel never showed
+            # this because its list already grows.
+            Window(),
         ], width=24, style="class:find-panel")
 
     def _scroll_to_cursor(self):
