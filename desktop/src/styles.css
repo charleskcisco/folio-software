@@ -1,0 +1,52 @@
+/* The window is the terminal. No chrome, no padding, nothing for a
+   student to wonder about -- the whole point is that this does not look
+   like a terminal emulator someone left open. */
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* The matte: the window is a frame around Folio. The padding is what the
+   grid floats in, and it is also where the leftover pixels go -- the cell
+   grid can never divide the window exactly, and an intentional margin is
+   better than a ragged edge. Colours are set from the running scheme in
+   main.ts; these are only what shows before the first paint. */
+body {
+  padding: 10px;
+  box-sizing: border-box;
+  background: #2d2d2d;
+  /* Deliberately not animated. Easing the padding was tried and reverted:
+     the box changing continuously while the grid can only be re-measured
+     at discrete points means the canvas is either clipped for the whole
+     animation or repainted on every frame, and both read as flicker. The
+     frame changes in one step, inside the OS's own full-screen animation,
+     where it is hard to notice. */
+}
+
+/* Concentric with the window's own corners. A square page inside a rounded
+   window reads as a mistake at every corner; the inner radius wants to be
+   the outer one less the gap it sits inside. overflow: hidden is what
+   actually clips the renderer's canvas to it. */
+#terminal {
+  height: 100%;
+  width: 100%;
+  background: #2a2a2a;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* xterm draws its own scrollbar; with scrollback: 0 there is nothing to
+   scroll and the bar is only a seam. */
+.xterm-viewport { overflow: hidden !important; }
+
+/* Full screen: no frame, no inner radius. See syncFrame() in main.ts --
+   the display's own corners do the rounding, and there is no window edge
+   left for a matte to sit against. */
+body.fullscreen {
+  padding: 0;
+}
+
+body.fullscreen #terminal {
+  border-radius: 0;
+}

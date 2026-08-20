@@ -2,6 +2,9 @@
 __pycache__/
 *.zip
 *.png
+# ...but Tauri's app icons are source, not screenshots: the bundle
+# config names them, and a fresh clone cannot build without them.
+!desktop/src-tauri/icons/*.png
 .venv/
 vendor/
 
