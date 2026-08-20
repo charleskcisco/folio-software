@@ -262,6 +262,64 @@ window.addEventListener("resize", () => {
 });
 
 
+// Folio's exit codes, from run.sh -- the launcher loop the deck runs it
+// under. 43 asks for a plain relaunch, which is how changing the vault
+// root rebinds everything cleanly; 42 asks for pull-then-relaunch, which
+// a frozen build cannot do (updates arrive as a new build), so it is
+// treated the same. In the wrapper there is no launcher loop, so this is
+// it -- without one, changing the vault exits Folio and leaves the window
+// showing a dead terminal and nothing else.
+const RELAUNCH_CODES = new Set([42, 43]);
+
+// A relaunch is a user action -- changing the vault root -- so it should
+// never repeat quickly. If it does, something is asking to restart on
+// startup and looping would peg a core and explain nothing.
+let relaunches: number[] = [];
+
+const exited = new Channel<number>();
+exited.onmessage = (code) => {
+  if (RELAUNCH_CODES.has(code)) {
+    const now = Date.now();
+    relaunches = relaunches.filter((t) => now - t < 10_000);
+    relaunches.push(now);
+    if (relaunches.length > 3) {
+      term.write(
+        "\r\n\x1b[31mFolio keeps asking to restart.\x1b[0m " +
+          "Stopping, rather than looping.\r\n",
+      );
+      return;
+    }
+    void launch();
+    return;
+  }
+  // Any other exit is the user quitting, or a crash. Say so: scrollback
+  // is disabled, so a traceback has already scrolled away, and a blank
+  // window is the least useful thing we could show.
+  term.write(
+    `\r\n\x1b[33mFolio exited (code ${code}).\x1b[0m ` +
+      `Close the window, or reopen Folio to start again.\r\n`,
+  );
+};
+
+async function launch() {
+  const program = await invoke<string>("folio_path");
+  // Report the size we actually have. Claiming a wider terminal than the
+  // window can show makes Folio lay out to columns that are not there and
+  // the right-hand edge wraps into nonsense; the window's minimum size is
+  // what guarantees the roomy chrome, not a number invented here.
+  sentCols = term.cols;
+  sentRows = term.rows;
+  await invoke("pty_start", {
+    program,
+    args: [],
+    cols: term.cols,
+    rows: term.rows,
+    onOutput: output,
+    onExit: exited,
+  });
+  term.focus();
+}
+
 async function start() {
   // Measure the grid only once the real font is resident. xterm.js takes
   // its cell size from whatever face is available at open() -- if that is
@@ -299,21 +357,7 @@ async function start() {
 
   fit.fit();
 
-  const program = await invoke<string>("folio_path");
-  // Report the size we actually have. Claiming a wider terminal than the
-  // window can show makes Folio lay out to columns that are not there and
-  // the right-hand edge wraps into nonsense; the window's minimum size is
-  // what guarantees the roomy chrome, not a number invented here.
-  sentCols = term.cols;
-  sentRows = term.rows;
-  await invoke("pty_start", {
-    program,
-    args: [],
-    cols: term.cols,
-    rows: term.rows,
-    onOutput: output,
-  });
-  term.focus();
+  await launch();
 }
 
 // A click anywhere is a click into the document; without this the cursor

@@ -6,6 +6,7 @@
 //! opens a pty, spawns the frozen binary on the far end, and moves bytes.
 
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
@@ -15,8 +16,13 @@ use tauri::ipc::Channel;
 pub struct PtySession {
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     master: Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>,
-    /// Kept so a previous Folio can be shut down before a new one starts.
-    child: Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>,
+    /// Kept so a previous Folio can be shut down before a new one starts,
+    /// and so the reader thread can collect the exit status.
+    child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
+    /// Bumped on every start. A reader thread reports its child's exit only
+    /// while it is still the current session, so a deliberate teardown does
+    /// not look like Folio falling over.
+    generation: Arc<AtomicU64>,
 }
 
 impl Default for PtySession {
@@ -24,7 +30,8 @@ impl Default for PtySession {
         Self {
             writer: Mutex::new(None),
             master: Mutex::new(None),
-            child: Mutex::new(None),
+            child: Arc::new(Mutex::new(None)),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -39,6 +46,9 @@ impl Default for PtySession {
 /// untidiness. Killing the child first is what makes `pty_start`
 /// repeatable.
 fn stop_existing(state: &PtySession) {
+    // Anything the outgoing reader thread reports from here on is the
+    // result of this teardown, not news about Folio.
+    state.generation.fetch_add(1, Ordering::SeqCst);
     // Drop the handles first so the child's terminal hangs up.
     if let Ok(mut w) = state.writer.lock() {
         w.take();
@@ -80,6 +90,7 @@ pub fn pty_start(
     cols: u16,
     rows: u16,
     on_output: Channel<Vec<u8>>,
+    on_exit: Channel<i32>,
 ) -> Result<(), String> {
     stop_existing(&state);
 
@@ -131,6 +142,10 @@ pub fn pty_start(
     *state.master.lock().map_err(|_| "master lock poisoned")? = Some(pair.master);
 
     let channel = Arc::new(on_output);
+    let child_handle = Arc::clone(&state.child);
+    let generation = Arc::clone(&state.generation);
+    let my_generation = generation.load(Ordering::SeqCst);
+
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
@@ -143,6 +158,25 @@ pub fn pty_start(
                 }
                 Err(_) => break,
             }
+        }
+
+        // Folio has gone. Collect the status and tell the frontend, which
+        // owns the decision about what an exit means -- a vault change
+        // asks for a relaunch, anything else is news the user needs. Left
+        // unreported, the window is simply blank, which is what a vault
+        // switch used to look like.
+        if generation.load(Ordering::SeqCst) != my_generation {
+            return; // superseded by a deliberate restart
+        }
+        let status = child_handle
+            .lock()
+            .ok()
+            .and_then(|mut c| c.take())
+            .and_then(|mut ch| ch.wait().ok())
+            .map(|st| st.exit_code() as i32)
+            .unwrap_or(-1);
+        if generation.load(Ordering::SeqCst) == my_generation {
+            let _ = on_exit.send(status);
         }
     });
 
