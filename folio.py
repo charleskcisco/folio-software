@@ -3948,6 +3948,7 @@ def create_app(storage):
     scheme = cfg.get("color_scheme", "dark")
     state.color_scheme = scheme if scheme in COLOR_SCHEMES else "dark"
     state.style = PtStyle.from_dict(COLOR_SCHEMES[state.color_scheme])
+    _emit_terminal_colors(state.color_scheme)
     try:
         state.editor_width = int(cfg.get("editor_width", 0) or 0)
     except (TypeError, ValueError):
@@ -4009,7 +4010,10 @@ def create_app(storage):
     def _get_shutdown_hint():
         now = time.monotonic()
         if now - state.quit_pending < 2.0:
-            return [("class:accent bold", " (^q) press again to quit ")]
+            return [("class:accent bold",
+                     f" ({_key('^q')}) press again to quit ")]
+        if _is_desktop():
+            return []
         return [("class:hint", " (^s) shut down ")]
 
     # Action-hint segments shared by the wide top bar (right-aligned,
@@ -4031,8 +4035,13 @@ def create_app(storage):
 
     def _get_right_hints():
         hints = _browser_action_hints()
-        hints.append(("class:hint.sep", "  ·  "))
-        hints.extend(_get_shutdown_hint())
+        # The separator belongs to the shutdown hint, not to the bar. With
+        # nothing after it -- as in the wrapper, where shutting the machine
+        # down is not on offer -- a trailing divider just dangles.
+        tail = _get_shutdown_hint()
+        if tail:
+            hints.append(("class:hint.sep", "  ·  "))
+            hints.extend(tail)
         return hints
 
     title_hints_window = VSplit([
@@ -4045,8 +4054,13 @@ def create_app(storage):
 
     def _get_exports_right_hints():
         hints = _exports_action_hints()
-        hints.append(("class:hint.sep", "  ·  "))
-        hints.extend(_get_shutdown_hint())
+        # The separator belongs to the shutdown hint, not to the bar. With
+        # nothing after it -- as in the wrapper, where shutting the machine
+        # down is not on offer -- a trailing divider just dangles.
+        tail = _get_shutdown_hint()
+        if tail:
+            hints.append(("class:hint.sep", "  ·  "))
+            hints.extend(tail)
         return hints
 
     exports_title_window = VSplit([
@@ -4654,7 +4668,7 @@ def create_app(storage):
         return [("class:status", "")]
 
     def get_guide_hint():
-        return [("class:hint", " (^g) guide ")]
+        return [("class:hint", f" ({_key('^g')}) guide ")]
 
     status_bar = VSplit([
         Window(FormattedTextControl(get_status_text), height=1, style="class:status"),
@@ -4662,29 +4676,32 @@ def create_app(storage):
                align=WindowAlign.RIGHT, style="class:status", dont_extend_width=True),
     ])
 
-    _KB_ALL = [
+    _KB_ALL = _keys([
         ("esc", "Folio"), ("^p", "Commands"), ("^q", "Quit"), ("^s", "Save"),
         ("^b", "Bold"), ("^i", "Italic"), ("^n", "Footnote"), ("^r", "Cite"),
         ("^f", "Find/Replace"), ("^o", "Outline"), ("^z", "Undo"),
         ("^y", "Redo"),
-    ]
+    ])
     _KB_SECTIONS = [
-        [("esc", "Folio"),
-         ("^p", "Commands"), ("^q", "Quit"), ("^s", "Save")],
-        [("^b", "Bold"), ("^i", "Italic"), ("^n", "Footnote"),
-         ("^r", "Cite"), ("^f", "Find/Replace")],
-        [("^o", "Outline"), ("^z", "Undo"), ("^y", "Redo")],
+        _keys([("esc", "Folio"),
+               ("^p", "Commands"), ("^q", "Quit"), ("^s", "Save")]),
+        _keys([("^b", "Bold"), ("^i", "Italic"), ("^n", "Footnote"),
+               ("^r", "Cite"), ("^f", "Find/Replace")]),
+        _keys([("^o", "Outline"), ("^z", "Undo"), ("^y", "Redo")]),
     ]
     # Keep descriptions <= 15 chars so each line ( 5 for the key + 2
     # spaces + desc) fits the narrow 22-column guide panel without being
     # clipped at the screen edge.
-    _KB_EXTRAS = [
+    # Shut down halts the machine and F12 shells out to grim, a Wayland
+    # screenshot tool. Neither belongs in a window on someone's laptop.
+    _KB_EXTRAS = _keys([
         ("^up", "Go to top"), ("^dn", "Go to bottom"),
         ("^w", "Word/¶/off"),
         ("↵", "Continue list"),
-        ("^g", "Keybindings"), ("^s", "Shut down"),
-        ("F12", "Screenshot"),
-    ]
+        ("^g", "Keybindings"),
+    ] + ([] if _is_desktop() else [
+        ("^s", "Shut down"), ("F12", "Screenshot"),
+    ]))
 
     def get_keybindings_text():
         cols = shutil.get_terminal_size().columns
@@ -5851,9 +5868,16 @@ def create_app(storage):
         items = [
             (None, "Appearance"),
             ("scheme", f"Color scheme: {state.color_scheme}"),
-            ("font",
-             f"Font size: {font if font is not None else 'default'}"
-             "  (applies on restart)"),
+        ]
+        # Font size is read from and written to foot.ini, the deck's
+        # terminal emulator. In the wrapper the terminal is xterm.js and
+        # this setting would change nothing at all.
+        if not _is_desktop():
+            items.append(
+                ("font",
+                 f"Font size: {font if font is not None else 'default'}"
+                 "  (applies on restart)"))
+        items += [
             (None, "Folio"),
             ("vault", f"Vault: {state.storage.vault_dir}"),
             ("folders",
@@ -5875,11 +5899,12 @@ def create_app(storage):
              f"Aspell language: {state.spell_lang or 'default'}"),
             (None, "Export"),
             ("pdfengine", f"PDF engine: {state.pdf_engine}"),
-            (None, "Device"),
-            ("wifi", "Wi-Fi…"),
-            ("trash",
-             f"Trash ({len(state.storage.list_trash())})"),
         ]
+        trash = ("trash", f"Trash ({len(state.storage.list_trash())})")
+        if _is_desktop():
+            items += [(None, "Storage"), trash]
+        else:
+            items += [(None, "Device"), ("wifi", "Wi-Fi…"), trash]
         return items
 
     @kb.add("o", filter=entry_list_focused)
@@ -5967,6 +5992,7 @@ def create_app(storage):
                     cfg = _load_config()
                     cfg["color_scheme"] = state.color_scheme
                     _save_config(cfg)
+                    _emit_terminal_colors(state.color_scheme)
                     get_app().invalidate()
                 elif choice == "font":
                     cur = _get_foot_font_size()
@@ -6816,6 +6842,79 @@ def _env(name: str, default: str = "") -> str:
     return (os.environ.get("FOLIO_" + name)
             or os.environ.get("JOURNAL_" + name)
             or default)
+
+
+def _is_desktop() -> bool:
+    """True when Folio is running inside the desktop wrapper.
+
+    The wrapper sets FOLIO_HOST; the deck does not. This gates the parts of
+    the UI that only mean something on the device -- shutting the machine
+    down, the Wi-Fi picker, the console font, grabbing the framebuffer --
+    so a student on a laptop is not offered controls that do nothing.
+    """
+    return _env("HOST") == "desktop"
+
+
+def _mod() -> str:
+    """The modifier symbol the guide should show.
+
+    Only the macOS wrapper translates Cmd into the control codes Folio
+    binds, so Cmd is honest there and nowhere else. A Mac user running
+    folio.py in Terminal.app still presses Ctrl, and the guide has to say
+    Ctrl -- which is why this keys off the wrapper, not off sys.platform
+    alone.
+    """
+    return "\u2318" if _is_desktop() and sys.platform == "darwin" else "^"
+
+
+def _key(k: str) -> str:
+    """Render one key label for the host we are actually running on."""
+    if _mod() == "^" or not k.startswith("^"):
+        return k
+    rest = k[1:]
+    return _mod() + {"up": "\u2191", "dn": "\u2193"}.get(rest, rest.upper())
+
+
+def _keys(pairs):
+    """Render a list of (key, description) rows."""
+    return [(_key(k), d) for k, d in pairs]
+
+
+def _scheme_colors(scheme: str) -> tuple[str, str]:
+    """The (foreground, background) hex pair of a scheme's base style."""
+    fg = bg = ""
+    for token in COLOR_SCHEMES.get(scheme, {}).get("", "").split():
+        if token.startswith("bg:#"):
+            bg = token[3:]
+        elif token.startswith("#"):
+            fg = token
+    return fg, bg
+
+
+def _emit_terminal_colors(scheme: str) -> None:
+    """Tell the host terminal which colours this scheme uses.
+
+    OSC 10 and OSC 11 are how a full-screen program reports its foreground
+    and background to the terminal it is running in. The desktop wrapper
+    listens for them to colour the window frame, so the frame follows the
+    scheme without keeping its own copy of this palette -- one source of
+    truth, and nothing to drift when a scheme is edited here.
+
+    Wrapper only. On the deck this would repaint foot's background, which
+    changes the behaviour of a running device for no gain. The sequences
+    are cursor-neutral, so writing them mid-frame cannot disturb what
+    prompt_toolkit has drawn.
+    """
+    if not _is_desktop():
+        return
+    fg, bg = _scheme_colors(scheme)
+    if not (fg and bg):
+        return
+    try:
+        sys.__stdout__.write(f"\x1b]10;{fg}\x1b\\\x1b]11;{bg}\x1b\\")
+        sys.__stdout__.flush()
+    except (OSError, ValueError, AttributeError):
+        pass
 
 
 def _config_root(name: str) -> Path:
