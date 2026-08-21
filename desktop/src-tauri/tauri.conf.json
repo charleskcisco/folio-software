@@ -38,10 +38,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "../../dist/folio"
-    ],
     "category": "Productivity",
-    "shortDescription": "Distraction-free composition"
+    "shortDescription": "Distraction-free composition",
+    "externalBin": [
+      "binaries/folio"
+    ]
   }
 }

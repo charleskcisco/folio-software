@@ -12,3 +12,6 @@ vendor/
 build/
 dist/
 *.spec
+
+# Staged Tauri sidecar: a copy of dist/folio, rebuilt by freeze.sh.
+desktop/src-tauri/binaries/
