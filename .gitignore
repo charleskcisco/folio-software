@@ -15,3 +15,7 @@ dist/
 
 # Staged Tauri sidecar: a copy of dist/folio, rebuilt by freeze.sh.
 desktop/src-tauri/binaries/
+
+# Local build output and the Rosetta toolchain for Intel Mac builds.
+# Reconstructible from the URLs in desktop/README.md; ~180MB.
+builds/

@@ -1,10 +1,18 @@
 name: build
 
-# Folio targets three desktop machines and this repository is developed on
-# one of them. PyInstaller freezes for the architecture of the interpreter
-# running it and cannot cross-compile, so an Intel Mac build needs an Intel
-# runner and a Windows build needs a Windows runner -- there is no way to
-# produce either by hand here. This workflow is the only place they exist.
+# Windows is why this workflow exists. PyInstaller freezes for the
+# architecture of the interpreter running it, and nobody here has a
+# Windows machine, so this is the only place a Windows build comes from.
+#
+# The Macs are built and signed locally instead. Intel needed a runner too
+# until macos-13 was retired: every replacement Intel image is a "larger
+# runner", and those are billed even on public repositories. The local
+# route is an x86_64 Python under Rosetta -- see freeze.sh and
+# FOLIO_TOOLS_DIR -- which costs nothing and puts the build on the machine
+# holding the signing certificate anyway.
+#
+# The macOS job here is a canary, not a source of artifacts: it proves the
+# build still works from a clean checkout with no local state.
 #
 # Not run on every push: a build is ~90MB per platform and takes minutes.
 # Tag a release, or start it by hand from the Actions tab.
@@ -30,13 +38,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-13 is the last Intel runner GitHub offers. It is the
-          # only way to produce an x86_64 build, since a universal binary
-          # would need a universal2 Python and every wheel to match.
-          - os: macos-13
-            label: macos-intel
-            triple: x86_64-apple-darwin
-          - os: macos-14
+          # Clean-checkout build check. macos-14 is deprecated and
+          # macos-13 is gone, so this tracks the current GA image.
+          - os: macos-15
             label: macos-apple-silicon
             triple: aarch64-apple-darwin
           - os: windows-latest

@@ -34,8 +34,13 @@ case "$(uname -s)" in
   *)                    EXE="";     SEP=":" ;;
 esac
 
-PY=""
-for candidate in .venv/bin/python .venv/Scripts/python.exe python3 python; do
+# FOLIO_PYTHON picks the interpreter, which matters for universal builds:
+# PyInstaller freezes for the architecture of the interpreter running it,
+# so a universal2 binary needs a universal2 Python and nothing else will
+# do. CI installs one from python.org and points this at it.
+PY="${FOLIO_PYTHON:-}"
+[ -n "$PY" ] && [ ! -x "$PY" ] && { echo "error: FOLIO_PYTHON=$PY is not executable." >&2; exit 1; }
+[ -n "$PY" ] || for candidate in .venv/bin/python .venv/Scripts/python.exe python3 python; do
   if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
     PY="$candidate"; break
   fi
@@ -45,7 +50,16 @@ done
 resolve_tool() {
   # Follow symlinks: Homebrew's bin entries point into Cellar, and
   # PyInstaller would otherwise embed the link rather than the binary.
+  #
+  # FOLIO_TOOLS_DIR wins when set. Cross-architecture builds need the
+  # tools for the architecture being *built*, not the one building: an
+  # Intel binary with an arm64 pandoc inside it is not a build failure,
+  # it is a build that fails on the student's machine.
   local found real
+  if [ -n "${FOLIO_TOOLS_DIR:-}" ] && [ -x "${FOLIO_TOOLS_DIR}/$1${EXE}" ]; then
+    printf '%s' "${FOLIO_TOOLS_DIR}/$1${EXE}"
+    return 0
+  fi
   found="$(command -v "$1$EXE" 2>/dev/null)" \
     || found="$(command -v "$1" 2>/dev/null)" \
     || {
@@ -73,7 +87,18 @@ TYPST="$(resolve_tool typst)"
 echo "Bundling pandoc: $PANDOC"
 echo "Bundling typst:  $TYPST"
 
-"$PY" -m PyInstaller --noconfirm --onefile --name folio \
+# FOLIO_UNIVERSAL=1 asks for a binary that runs on both Intel and Apple
+# Silicon Macs. PyInstaller refuses unless *everything* it collects is
+# universal2 -- the interpreter, its extension modules, and the pandoc and
+# typst binaries embedded below -- so the caller has to have prepared all
+# of them. It fails loudly rather than quietly producing a thin binary.
+ARCH_ARGS=""
+if [ "${FOLIO_UNIVERSAL:-}" = "1" ]; then
+  ARCH_ARGS="--target-arch universal2"
+  echo "Building universal2 (Intel + Apple Silicon)"
+fi
+
+"$PY" -m PyInstaller --noconfirm --onefile --name folio ${ARCH_ARGS} \
   --add-data "templates${SEP}templates" \
   --add-data "fonts${SEP}fonts" \
   --add-data "csl${SEP}csl" \
@@ -103,7 +128,22 @@ detect_triple() {
   return 1
 }
 
-if TRIPLE="$(detect_triple)" && [ -n "$TRIPLE" ]; then
+# What was built is not necessarily what the host is. An Intel build made
+# on an Apple Silicon Mac under Rosetta is still an Intel binary, and
+# Tauri looks for the sidecar under the target it was asked to build -- so
+# ask the binary what it actually is rather than assuming it matches the
+# machine that produced it. Getting this wrong is silent: the wrong-named
+# sidecar simply is not found, and the app falls back to something else.
+if [ -z "${EXE}" ] && command -v lipo >/dev/null 2>&1; then
+  ARCHS="$(lipo -archs "dist/folio${EXE}" 2>/dev/null || true)"
+  case "$ARCHS" in
+    *arm64*x86_64*|*x86_64*arm64*) FORCED_TRIPLE="universal-apple-darwin" ;;
+    *x86_64*)                      FORCED_TRIPLE="x86_64-apple-darwin" ;;
+    *arm64*)                       FORCED_TRIPLE="aarch64-apple-darwin" ;;
+  esac
+fi
+
+if TRIPLE="${FORCED_TRIPLE:-$(detect_triple)}" && [ -n "$TRIPLE" ]; then
   mkdir -p "$SIDECAR_DIR"
   cp "dist/folio${EXE}" "${SIDECAR_DIR}/folio-${TRIPLE}${EXE}"
   chmod +x "${SIDECAR_DIR}/folio-${TRIPLE}${EXE}" 2>/dev/null || true
@@ -118,13 +158,26 @@ if TRIPLE="$(detect_triple)" && [ -n "$TRIPLE" ]; then
   #
   # Only refresh what already exists. A missing copy means Tauri has not
   # built yet, and it will take the staged sidecar when it does.
-  for build in debug release; do
-    copy="desktop/src-tauri/target/${build}/folio${EXE}"
-    if [ -f "$copy" ]; then
-      cp "dist/folio${EXE}" "$copy"
-      chmod +x "$copy" 2>/dev/null || true
-      echo "Refreshed ${copy}"
-    fi
+  # Refresh only the copies this build is actually for.
+  #
+  # Tauri puts a --target build under target/<triple>/ and a native one
+  # directly under target/. Refreshing both unconditionally means a cross
+  # build overwrites the native copy: freezing for Intel on an Apple
+  # Silicon Mac would leave the arm64 app running an x86_64 sidecar, which
+  # works -- under Rosetta, slowly, silently -- until it does not.
+  HOST_TRIPLE="$(detect_triple || true)"
+  REFRESH_DIRS="desktop/src-tauri/target/${TRIPLE}"
+  [ "$TRIPLE" = "$HOST_TRIPLE" ] && REFRESH_DIRS="$REFRESH_DIRS desktop/src-tauri/target"
+
+  for dir in $REFRESH_DIRS; do
+    for build in debug release; do
+      copy="${dir}/${build}/folio${EXE}"
+      if [ -f "$copy" ]; then
+        cp "dist/folio${EXE}" "$copy"
+        chmod +x "$copy" 2>/dev/null || true
+        echo "Refreshed ${copy}"
+      fi
+    done
   done
 else
   # Never leave a stale sidecar behind. The wrapper resolves Folio from

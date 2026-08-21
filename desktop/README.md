@@ -6,6 +6,39 @@ This template should help get you started developing with Tauri in vanilla HTML,
 
 - [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
 
+## Building for Intel Macs
+
+Intel builds are made here, not on CI: `macos-13` was retired and every
+replacement Intel runner is a "larger runner", which GitHub bills even on
+public repositories. Rosetta does the job for nothing.
+
+PyInstaller freezes for the architecture of the interpreter running it, so
+the Intel build needs an x86_64 Python and x86_64 copies of pandoc and
+typst. They live in `builds/intel-toolchain/` (untracked, ~180MB) and are
+reconstructible from:
+
+- `astral-sh/python-build-standalone` — cpython 3.12 x86_64-apple-darwin
+  (3.12 to match CI; the version the binary embeds is the version students
+  run, so it should not differ between architectures)
+- `jgm/pandoc` — pandoc 3.10 x86_64-macOS
+- `typst/typst` — typst v0.15.1 x86_64-apple-darwin
+
+Then:
+
+```
+arch -x86_64 env \
+  FOLIO_PYTHON="$PWD/builds/intel-toolchain/python/bin/python3.12" \
+  FOLIO_TOOLS_DIR="$PWD/builds/intel-toolchain/bin" \
+  ./freeze.sh
+cd desktop && APPLE_SIGNING_IDENTITY="..." npm run tauri build -- --target x86_64-apple-darwin
+```
+
+freeze.sh reads the frozen binary's architecture with `lipo` and names the
+sidecar accordingly, so a cross build cannot end up staged under the host's
+triple. It also refreshes only the copies belonging to the target it built,
+which is what stops an Intel freeze from leaving the native app running an
+x86_64 sidecar under Rosetta.
+
 ## Signing (macOS)
 
 The signing identity is **not** in `tauri.conf.json`. It names a
