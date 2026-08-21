@@ -25,8 +25,22 @@
 set -e
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-PY=".venv/bin/python"
-[ -x "$PY" ] || PY="python3"
+# Windows differs in three ways that all have to be handled here, because
+# this script is what CI runs on every platform: PyInstaller separates
+# --add-data source from destination with ';' rather than ':', the frozen
+# output carries a .exe suffix, and a venv puts python under Scripts/.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) EXE=".exe"; SEP=";" ;;
+  *)                    EXE="";     SEP=":" ;;
+esac
+
+PY=""
+for candidate in .venv/bin/python .venv/Scripts/python.exe python3 python; do
+  if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
+    PY="$candidate"; break
+  fi
+done
+[ -n "$PY" ] || { echo "error: no python interpreter found." >&2; exit 1; }
 
 resolve_tool() {
   # Follow symlinks: Homebrew's bin entries point into Cellar, and
@@ -46,12 +60,12 @@ echo "Bundling pandoc: $PANDOC"
 echo "Bundling typst:  $TYPST"
 
 "$PY" -m PyInstaller --noconfirm --onefile --name folio \
-  --add-data "templates:templates" \
-  --add-data "fonts:fonts" \
-  --add-data "csl:csl" \
-  --add-data "refs:refs" \
-  --add-binary "${PANDOC}:bin" \
-  --add-binary "${TYPST}:bin" \
+  --add-data "templates${SEP}templates" \
+  --add-data "fonts${SEP}fonts" \
+  --add-data "csl${SEP}csl" \
+  --add-data "refs${SEP}refs" \
+  --add-binary "${PANDOC}${SEP}bin" \
+  --add-binary "${TYPST}${SEP}bin" \
   folio.py
 
 # Stage the sidecar for the desktop wrapper.
@@ -77,9 +91,9 @@ detect_triple() {
 
 if TRIPLE="$(detect_triple)" && [ -n "$TRIPLE" ]; then
   mkdir -p "$SIDECAR_DIR"
-  cp dist/folio "${SIDECAR_DIR}/folio-${TRIPLE}"
-  chmod +x "${SIDECAR_DIR}/folio-${TRIPLE}"
-  echo "Staged sidecar ${SIDECAR_DIR}/folio-${TRIPLE}"
+  cp "dist/folio${EXE}" "${SIDECAR_DIR}/folio-${TRIPLE}${EXE}"
+  chmod +x "${SIDECAR_DIR}/folio-${TRIPLE}${EXE}" 2>/dev/null || true
+  echo "Staged sidecar ${SIDECAR_DIR}/folio-${TRIPLE}${EXE}"
 
   # Refresh the copies Tauri has already made. It only re-copies an
   # externalBin when it rebuilds, and editing Python does not trigger a
@@ -91,10 +105,10 @@ if TRIPLE="$(detect_triple)" && [ -n "$TRIPLE" ]; then
   # Only refresh what already exists. A missing copy means Tauri has not
   # built yet, and it will take the staged sidecar when it does.
   for build in debug release; do
-    copy="desktop/src-tauri/target/${build}/folio"
+    copy="desktop/src-tauri/target/${build}/folio${EXE}"
     if [ -f "$copy" ]; then
-      cp dist/folio "$copy"
-      chmod +x "$copy"
+      cp "dist/folio${EXE}" "$copy"
+      chmod +x "$copy" 2>/dev/null || true
       echo "Refreshed ${copy}"
     fi
   done
@@ -112,5 +126,5 @@ else
 fi
 
 echo
-echo "Built dist/folio ($(du -h dist/folio | cut -f1))"
+echo "Built dist/folio${EXE} ($(du -h "dist/folio${EXE}" | cut -f1))"
 echo "Verify resources with: ./freeze.sh --check"

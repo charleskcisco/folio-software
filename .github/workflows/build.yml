@@ -1,0 +1,136 @@
+name: build
+
+# Folio targets three desktop machines and this repository is developed on
+# one of them. PyInstaller freezes for the architecture of the interpreter
+# running it and cannot cross-compile, so an Intel Mac build needs an Intel
+# runner and a Windows build needs a Windows runner -- there is no way to
+# produce either by hand here. This workflow is the only place they exist.
+#
+# Not run on every push: a build is ~90MB per platform and takes minutes.
+# Tag a release, or start it by hand from the Actions tab.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+# Pinned rather than "latest from a package manager". These two binaries
+# are inside every exported document: pandoc reads the markdown and typst
+# sets the page. A runner silently moving to a new typst would change the
+# typography of every PDF with nothing in the diff to explain it.
+env:
+  PANDOC_VERSION: '3.10'
+  TYPST_VERSION: 'v0.15.1'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing must not cancel the others: when Windows
+      # breaks we still want to know whether the Macs built.
+      fail-fast: false
+      matrix:
+        include:
+          # macos-13 is the last Intel runner GitHub offers. It is the
+          # only way to produce an x86_64 build, since a universal binary
+          # would need a universal2 Python and every wheel to match.
+          - os: macos-13
+            label: macos-intel
+            triple: x86_64-apple-darwin
+          - os: macos-14
+            label: macos-apple-silicon
+            triple: aarch64-apple-darwin
+          - os: windows-latest
+            label: windows-x64
+            triple: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python build dependencies
+        run: python -m pip install --quiet prompt_toolkit pygments pyinstaller
+
+      # Downloaded from the projects' own releases rather than a package
+      # manager, so the version is the one named above on every runner.
+      # freeze.sh finds them on PATH and embeds them in the frozen binary.
+      - name: Install pandoc and typst (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -eux
+          arch=$([ "${{ matrix.triple }}" = "aarch64-apple-darwin" ] && echo arm64 || echo x86_64)
+          curl -fsSL -o pandoc.zip \
+            "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-${arch}-macOS.zip"
+          unzip -q pandoc.zip
+          curl -fsSL -o typst.tar.xz \
+            "https://github.com/typst/typst/releases/download/${TYPST_VERSION}/typst-${{ matrix.triple }}.tar.xz"
+          tar -xJf typst.tar.xz
+          mkdir -p "$HOME/tools"
+          # Located rather than assumed. The directory inside each archive
+          # is the projects' business and has changed before; a hardcoded
+          # path turns their next tidy-up into a failed release build.
+          cp "$(find . -type f -name pandoc -perm -u+x | head -1)" "$HOME/tools/"
+          cp "$(find . -type f -name typst -perm -u+x | head -1)" "$HOME/tools/"
+          chmod +x "$HOME/tools/"*
+          echo "$HOME/tools" >> "$GITHUB_PATH"
+
+      - name: Install pandoc and typst (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -eux
+          curl -fsSL -o pandoc.zip \
+            "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-windows-x86_64.zip"
+          unzip -q pandoc.zip
+          curl -fsSL -o typst.zip \
+            "https://github.com/typst/typst/releases/download/${TYPST_VERSION}/typst-${{ matrix.triple }}.zip"
+          unzip -q typst.zip
+          mkdir -p "$HOME/tools"
+          # Located rather than assumed; see the macOS step.
+          cp "$(find . -type f -name pandoc.exe | head -1)" "$HOME/tools/"
+          cp "$(find . -type f -name typst.exe | head -1)" "$HOME/tools/"
+          echo "$HOME/tools" >> "$GITHUB_PATH"
+
+      - name: Verify the bundled tool versions
+        shell: bash
+        run: |
+          pandoc --version | head -1
+          typst --version
+
+      # bash on Windows too: the runners ship Git Bash, and freeze.sh
+      # handles the platform differences itself (the .exe suffix and
+      # PyInstaller's ';' data separator).
+      - name: Freeze Folio
+        shell: bash
+        run: ./freeze.sh
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build the desktop bundle
+        working-directory: desktop
+        # Unsigned. macOS signing needs a Developer ID certificate and its
+        # password in repository secrets; until those exist, signing stays
+        # a local step and CI produces artifacts to sign, not shipped ones.
+        run: npm run tauri build -- --target ${{ matrix.triple }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folio-${{ matrix.label }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            desktop/src-tauri/target/${{ matrix.triple }}/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/${{ matrix.triple }}/release/bundle/msi/*.msi
+            desktop/src-tauri/target/${{ matrix.triple }}/release/bundle/nsis/*.exe
