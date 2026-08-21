@@ -73,6 +73,11 @@
 // distance.
 #let para-extra = 9pt
 
+// Compare a heading's text without caring how it was marked up.
+#let _plain(body) = lower(repr(body).replace("[", "").replace("]", "")).trim()
+
+#let _BIB_TITLES = ("bibliography", "works cited", "references")
+
 #let conf(
   title: "",
   author: "",
@@ -145,6 +150,31 @@
     heading(level: 1, "Bibliography")
     set par(hanging-indent: 0.5in, first-line-indent: 0pt)
     it
+  }
+
+  // The same list, typed out by hand -- which is the ordinary case, since
+  // most writers never touch citeproc. pandoc labels that block
+  // <bibentries> (see _wrap_bibliography); a generated one arrives as
+  // <refs> above. The entries need the opposite of the body's
+  // first-line-indent: flush-left first line, continuations indented.
+  // Without this rule they inherit the 0.5in first-line indent set for
+  // prose and come out indented at the top and flush at the bottom --
+  // upside down, and unmistakably wrong to anyone marking the paper.
+  //
+  // No heading is emitted here, unlike <refs>: the writer typed one.
+  show <bibentries>: it => {
+    set par(hanging-indent: 0.5in, first-line-indent: 0pt)
+    it
+  }
+
+  // A reference list starts a new page. Matched on the heading's text
+  // rather than its level, because whether it was typed as # or ## is the
+  // writer's arbitrary choice and should not decide the layout.
+  show heading: it => {
+    if _BIB_TITLES.any(t => _plain(it.body) == t) {
+      pagebreak(weak: true)
+      it
+    } else { it }
   }
 
   // ── Front matter ───────────────────────────────────────────────────────
