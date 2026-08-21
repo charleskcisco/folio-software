@@ -80,6 +80,24 @@ if TRIPLE="$(detect_triple)" && [ -n "$TRIPLE" ]; then
   cp dist/folio "${SIDECAR_DIR}/folio-${TRIPLE}"
   chmod +x "${SIDECAR_DIR}/folio-${TRIPLE}"
   echo "Staged sidecar ${SIDECAR_DIR}/folio-${TRIPLE}"
+
+  # Refresh the copies Tauri has already made. It only re-copies an
+  # externalBin when it rebuilds, and editing Python does not trigger a
+  # Rust rebuild -- so without this a freeze succeeds, reports success,
+  # and the desktop app carries on running the previous binary. That has
+  # burned an afternoon twice: the fix looks like it did not work, and
+  # the thing being tested is not the thing that was built.
+  #
+  # Only refresh what already exists. A missing copy means Tauri has not
+  # built yet, and it will take the staged sidecar when it does.
+  for build in debug release; do
+    copy="desktop/src-tauri/target/${build}/folio"
+    if [ -f "$copy" ]; then
+      cp dist/folio "$copy"
+      chmod +x "$copy"
+      echo "Refreshed ${copy}"
+    fi
+  done
 else
   # Never leave a stale sidecar behind. The wrapper resolves Folio from
   # beside its own executable, so an old copy here is not inert -- Tauri
