@@ -45,13 +45,27 @@ done
 resolve_tool() {
   # Follow symlinks: Homebrew's bin entries point into Cellar, and
   # PyInstaller would otherwise embed the link rather than the binary.
-  local found
-  found="$(command -v "$1" 2>/dev/null)" || {
-    echo "error: $1 not found on PATH." >&2
-    echo "       Folio cannot export without it; install it and re-run." >&2
+  local found real
+  found="$(command -v "$1$EXE" 2>/dev/null)" \
+    || found="$(command -v "$1" 2>/dev/null)" \
+    || {
+      echo "error: $1 not found on PATH." >&2
+      echo "       Folio cannot export without it; install it and re-run." >&2
+      exit 1
+    }
+  real="$("$PY" -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$found")"
+
+  # Git Bash resolves `command -v pandoc` to a path with no .exe, because
+  # it appends the suffix implicitly when executing. PyInstaller does not:
+  # it takes the string literally and fails with "Unable to find
+  # C:\...\pandoc when adding binary and data files".
+  [ ! -f "$real" ] && [ -f "${real}${EXE}" ] && real="${real}${EXE}"
+
+  [ -f "$real" ] || {
+    echo "error: resolved $1 to '$real', which is not a file." >&2
     exit 1
   }
-  "$PY" -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$found"
+  printf '%s' "$real"
 }
 
 PANDOC="$(resolve_tool pandoc)"
