@@ -8,6 +8,25 @@ This template should help get you started developing with Tauri in vanilla HTML,
 
 ## Signing (macOS)
 
+The signing identity is **not** in `tauri.conf.json`. It names a
+certificate in one particular keychain, so committing it makes the build
+depend on the machine it was written on -- CI has no such certificate and
+fails with "The specified item could not be found in the keychain".
+
+Pass it in the environment instead, and an unsigned build is simply the
+default everywhere else:
+
+```
+APPLE_SIGNING_IDENTITY="Developer ID Application: NAME (TEAMID)" \
+  npm run tauri build
+```
+
+`security find-identity -v -p codesigning` lists the identities available.
+Note the Team ID is the certificate's **OU** field, not the value in
+parentheses after the name -- those differ on a Development certificate,
+and `notarytool` rejects the wrong one with an unhelpful 403.
+
+
 `src-tauri/entitlements.plist` grants one entitlement,
 `com.apple.security.cs.disable-library-validation`. Folio is a PyInstaller
 onefile binary: at launch it unpacks Python and its `.so` files into a temp

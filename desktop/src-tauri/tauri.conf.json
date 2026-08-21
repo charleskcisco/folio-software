@@ -44,7 +44,6 @@
       "binaries/folio"
     ],
     "macOS": {
-      "signingIdentity": "Developer ID Application: CHARLES KEITH CISCO (SYZ3NQDYZ7)",
       "hardenedRuntime": true,
       "entitlements": "entitlements.plist"
     }
