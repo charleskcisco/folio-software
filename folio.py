@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import io
 import json
 import os
@@ -6685,7 +6686,7 @@ def create_app(storage):
             dlg = CommandPaletteDialog(cmds)
             action = await show_dialog_as_float(state, dlg)
             if action is not None:
-                if asyncio.iscoroutinefunction(action):
+                if inspect.iscoroutinefunction(action):
                     await action()
                 elif callable(action):
                     action()
@@ -7112,6 +7113,41 @@ def _default_vault() -> Path:
     return Path.home() / "Documents" / "Journal"
 
 
+def _run_quietly(app):
+    """Run the app with stderr diverted to a log.
+
+    Folio paints every cell itself, so anything written to stderr lands on
+    top of the interface and stays there -- prompt_toolkit has no idea the
+    screen changed underneath it, so it never repaints those cells. One
+    DeprecationWarning during an export is enough to scramble a page of
+    text and leave it scrambled.
+
+    The output still matters, so it goes to a file rather than nowhere.
+    stderr is restored before returning, so a traceback that escapes the
+    app still reaches the terminal, where it belongs.
+    """
+    stream = None
+    try:
+        log = _config_path().parent / "folio.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        stream = open(log, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        stream = None
+
+    original = sys.stderr
+    if stream is not None:
+        sys.stderr = stream
+    try:
+        return app.run(pre_run=getattr(app, "start_background_tasks", None))
+    finally:
+        sys.stderr = original
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+
 def main() -> None:
     if _env("VAULT"):
         data_dir = Path(_env("VAULT"))
@@ -7157,7 +7193,7 @@ def main() -> None:
             pass
 
     app = create_app(VaultStorage(data_dir))
-    result = app.run(pre_run=getattr(app, "start_background_tasks", None))
+    result = _run_quietly(app)
     cleanup = getattr(app, "cleanup", None)
     if cleanup:
         cleanup()
