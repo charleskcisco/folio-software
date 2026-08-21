@@ -2099,6 +2099,9 @@ class SelectableList:
         self.selected_index = 0
         self._last_click_index = -1
         self._last_click_time = 0.0
+        # Where the wheel has parked the view, or None to let the view
+        # follow the selection as usual. See _wheel().
+        self._pinned_scroll = None
         self.on_select = on_select
         self.on_navigate = None
         self._kb = KeyBindings()
@@ -2108,6 +2111,7 @@ class SelectableList:
         def _up(event):
             j = sl._scan(sl.selected_index - 1, -1)
             if j is not None:
+                sl._pinned_scroll = None
                 sl.selected_index = j
                 if sl.on_navigate:
                     sl.on_navigate()
@@ -2116,6 +2120,7 @@ class SelectableList:
         def _down(event):
             j = sl._scan(sl.selected_index + 1, 1)
             if j is not None:
+                sl._pinned_scroll = None
                 sl.selected_index = j
                 if sl.on_navigate:
                     sl.on_navigate()
@@ -2131,6 +2136,7 @@ class SelectableList:
         def _home(event):
             j = sl._scan(0, 1)
             if j is not None:
+                sl._pinned_scroll = None
                 sl.selected_index = j
                 if sl.on_navigate:
                     sl.on_navigate()
@@ -2140,6 +2146,7 @@ class SelectableList:
             if sl.items:
                 j = sl._scan(len(sl.items) - 1, -1)
                 if j is not None:
+                    sl._pinned_scroll = None
                     sl.selected_index = j
                     if sl.on_navigate:
                         sl.on_navigate()
@@ -2161,6 +2168,17 @@ class SelectableList:
             content=self.control, style="class:select-list", wrap_lines=False,
         )
 
+        # Hold the wheel's scroll position against prompt_toolkit's own
+        # scroll-to-cursor, which runs on every render.
+        _original_scroll = self.window._scroll
+
+        def _hold_scroll(ui_content, width, height):
+            _original_scroll(ui_content, width, height)
+            if self._pinned_scroll is not None:
+                self.window.vertical_scroll = self._pinned_scroll
+
+        self.window._scroll = _hold_scroll
+
     def _scan(self, start, step):
         """Index of the next selectable (non-header) item from `start`
         in direction `step`, or None. Header items have id None."""
@@ -2171,28 +2189,30 @@ class SelectableList:
             i += step
         return None
 
-    def _step(self, delta):
-        """Move the selection by delta rows, skipping section headers."""
-        if not self.items:
+    def _wheel(self, delta):
+        """Scroll the view by delta rows, leaving the selection alone.
+
+        Letting the Window scroll itself is not enough. The selected row
+        carries [SetCursorPosition], so prompt_toolkit re-scrolls to it on
+        the next render and the list springs back; dropping that marker is
+        worse, because the content cursor then defaults to the top and the
+        view is pinned there instead.
+
+        So the offset is recorded and reapplied after prompt_toolkit has
+        computed its own -- the same trick _scroll_to_cursor uses, held
+        until the selection moves rather than for a single frame.
+        """
+        window = self.window
+        info = window.render_info
+        if info is None:
             return
-        target = min(max(self.selected_index + delta, 0), len(self.items) - 1)
-        forward = 1 if delta > 0 else -1
-        j = self._scan(target, forward)
-        if j is None:
-            j = self._scan(target, -forward)
-        if j is not None and j != self.selected_index:
-            self.selected_index = j
-            if self.on_navigate:
-                self.on_navigate()
+        limit = max(0, info.content_height - info.window_height)
+        base = (self._pinned_scroll if self._pinned_scroll is not None
+                else window.vertical_scroll)
+        self._pinned_scroll = min(max(0, base + delta), limit)
 
     def _mouse_handler(self, index):
-        """Wheel scrolls, a click selects, a double-click opens.
-
-        The wheel moves the selection rather than the viewport. In this
-        app the selection is what drives the preview pane, so scrolling
-        the view alone would leave the two showing different entries --
-        and prompt_toolkit would scroll back to the cursor on the next
-        render anyway.
+        """Wheel scrolls the list, a click selects, a double-click opens.
 
         prompt_toolkit has no double-click event, so it is timed here.
 
@@ -2201,16 +2221,17 @@ class SelectableList:
         """
         def handle(mouse_event):
             if mouse_event.event_type == MouseEventType.SCROLL_UP:
-                self._step(-_SCROLL_ROWS)
+                self._wheel(-_SCROLL_ROWS)
                 return None
             if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
-                self._step(_SCROLL_ROWS)
+                self._wheel(_SCROLL_ROWS)
                 return None
             if mouse_event.event_type != MouseEventType.MOUSE_UP:
                 return NotImplemented
             if index >= len(self.items) or self.items[index][0] is None:
                 return None
 
+            self._pinned_scroll = None
             now = time.monotonic()
             same_row = index == self._last_click_index
             double = same_row and (now - self._last_click_time) < _DOUBLE_CLICK_SECS
@@ -2272,6 +2293,7 @@ class SelectableList:
 
     def set_items(self, items):
         self.items = items
+        self._pinned_scroll = None
         if self.selected_index >= len(items):
             self.selected_index = max(0, len(items) - 1)
         self.snap()
