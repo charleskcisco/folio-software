@@ -1701,10 +1701,19 @@ def _initial_pdf_engine(cfg: dict) -> str:
     working device's export engine on update is how it stops working.
 
     Only a genuinely fresh install starts on typst.
+
+    None of that applies to the desktop wrapper, which has no such
+    history: it is new, it bundles typst, and it does not bundle
+    LibreOffice -- which a student's laptop is unlikely to have at all.
+    Worse, the heuristic misfires there. A config file appears as soon as
+    anyone picks a vault or a theme, so a wrapper install would start on
+    typst and then quietly switch to LibreOffice on its second launch.
     """
     engine = cfg.get("pdf_engine")
     if engine in PDF_ENGINES:
         return engine
+    if _is_desktop():
+        return "typst"
     return "libreoffice" if _config_path().exists() else "typst"
 
 

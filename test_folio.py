@@ -1053,8 +1053,13 @@ def test_initial_pdf_engine():
     with tempfile.TemporaryDirectory() as tmpdir:
         cfgp = Path(tmpdir) / "config.json"
         orig = J._config_path
+        orig_host = os.environ.pop("FOLIO_HOST", None)
         J._config_path = lambda: cfgp
         try:
+            # Everything below the wrapper block is deck behaviour, so the
+            # host must be unset explicitly -- otherwise running the suite
+            # from a shell that happens to export FOLIO_HOST would quietly
+            # assert the wrong thing.
             # No config file at all -> genuinely fresh install.
             assert not cfgp.exists()
             assert _initial_pdf_engine({}) == "typst"
@@ -1069,8 +1074,23 @@ def test_initial_pdf_engine():
 
             # A junk value is not an explicit choice.
             assert _initial_pdf_engine({"pdf_engine": "nonsense"}) == "libreoffice"
+
+            # The wrapper has no field history to protect, bundles typst,
+            # and does not bundle LibreOffice. The "config exists" tell
+            # means nothing there: a config file appears as soon as anyone
+            # picks a vault, so honouring it would start a fresh install on
+            # typst and silently switch it to LibreOffice on second launch.
+            os.environ["FOLIO_HOST"] = "desktop"
+            assert cfgp.exists()
+            assert _initial_pdf_engine({"vault": "/home/x/Documents"}) == "typst"
+            assert _initial_pdf_engine({"pdf_engine": "nonsense"}) == "typst"
+            # An explicit choice still wins, wrapper or not.
+            assert _initial_pdf_engine({"pdf_engine": "libreoffice"}) == "libreoffice"
         finally:
             J._config_path = orig
+            os.environ.pop("FOLIO_HOST", None)
+            if orig_host is not None:
+                os.environ["FOLIO_HOST"] = orig_host
     print("  Initial PDF engine OK")
 
 
