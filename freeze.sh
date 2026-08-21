@@ -63,13 +63,34 @@ echo "Bundling typst:  $TYPST"
 # lookup missed -- so the app silently fell back to an absolute path into
 # this source tree and ran correctly here and nowhere else.
 SIDECAR_DIR="desktop/src-tauri/binaries"
-if TRIPLE="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')" && [ -n "$TRIPLE" ]; then
+
+detect_triple() {
+  local candidate t
+  for candidate in rustc "$HOME/.cargo/bin/rustc" \
+                   /opt/homebrew/opt/rustup/bin/rustc; do
+    t="$(command -v "$candidate" >/dev/null 2>&1 && "$candidate" -vV 2>/dev/null \
+         | sed -n 's/^host: //p')" || t=""
+    [ -n "$t" ] && { printf '%s' "$t"; return 0; }
+  done
+  return 1
+}
+
+if TRIPLE="$(detect_triple)" && [ -n "$TRIPLE" ]; then
   mkdir -p "$SIDECAR_DIR"
   cp dist/folio "${SIDECAR_DIR}/folio-${TRIPLE}"
   chmod +x "${SIDECAR_DIR}/folio-${TRIPLE}"
   echo "Staged sidecar ${SIDECAR_DIR}/folio-${TRIPLE}"
 else
-  echo "warning: rustc not on PATH; sidecar not staged for the wrapper." >&2
+  # Never leave a stale sidecar behind. The wrapper resolves Folio from
+  # beside its own executable, so an old copy here is not inert -- Tauri
+  # copies it into the build and the app runs it, silently, in place of
+  # the build that just happened. Warning and continuing meant a freeze
+  # could appear to succeed while changing nothing that ran.
+  rm -f "${SIDECAR_DIR}"/folio-*
+  echo "error: cannot determine the Rust host triple (rustc not found)." >&2
+  echo "       Removed any stale sidecar rather than leave the wrapper" >&2
+  echo "       running an older Folio. Install rustup and re-run." >&2
+  exit 1
 fi
 
 echo
