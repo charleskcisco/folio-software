@@ -24,7 +24,7 @@ Windows shows it for any program without a code signing certificate,  which cost
 The warning appears once, when you install. After that Folio opens normally, like any other program.
 
 ### To my students in particular
-This warning has a purpose: protection from malicious software. It is Windows telling you it cannot vouch for this file—and much of the time, that is a warning you should take seriously. In this case, though, you know where this file came from: you got the link from me personally and you downloaded it from that link. So: click through this one, and keep being suspicious of the next one. If a program you you cannot vouch for produces this warning, click cancel.
+This warning has a purpose: protection from malicious software. It is Windows telling you it cannot vouch for this file—and much of the time, that is a warning you should take seriously. In this case, though, you know where this file came from: you got the link from me personally and you downloaded it from that link. So: click through this one, and keep being suspicious of the next one. If a program you cannot vouch for produces this warning, click cancel.
 
 ## If something goes wrong
 Tell me what you did and what you saw, and bring the machine if you can. "It didn't work" is hard to fix; "I clicked Export and it said Pandoc not found" takes about a minute.
