@@ -19,7 +19,7 @@ Open the `.dmg`, drag **Folio** into your Applications folder, and open it from 
 Run the `.exe`. **Windows will show you a blue box that says "Windows protected your PC."** This is expected. Click **More info**, then **Run anyway**.
 
 ### Why does that warning appear?
-Windows shows it for any program it has not seen many people install before. Software companies make it go away by buying a *code signingcertificate*, which costs several hundred dollars a year. Folio is free and open source, made by one person for educational purposes, making the purchase of a code signing certificate pointless at this time. 
+Windows shows it for any program without a code signing certificate,  which costs several hundred dollars a year. Folio is free and open source, made by one person for educational purposes, mostly for in-person distrobution. These realities render the purchase of a code signing certificate pointless at this time.
 
 The warning appears once, when you install. After that Folio opens normally, like any other program.
 
