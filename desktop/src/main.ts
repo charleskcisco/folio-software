@@ -337,6 +337,27 @@ async function start() {
   await document.fonts.ready;
 
   term.open(document.getElementById("terminal")!);
+
+  // Keep Apple Intelligence off the document.
+  //
+  // Writing Tools anchors its floating button to whatever editable
+  // element holds focus, which here is the hidden textarea xterm uses for
+  // input. The button then hovers over the grid, follows the cursor, and
+  // covers whatever character is beneath it -- there is no layout for it
+  // to occupy in a terminal that paints every cell itself.
+  //
+  // This is the web-side control. WKWebView has no writingToolsBehavior
+  // property -- that belongs to NSTextView -- so the native route tried
+  // earlier silently did nothing.
+  const helper = document.querySelector<HTMLElement>(".xterm-helper-textarea");
+  for (const el of [helper, document.body]) {
+    if (!el) continue;
+    el.setAttribute("writingsuggestions", "false");
+    el.setAttribute("autocorrect", "off");
+    el.setAttribute("autocapitalize", "off");
+    el.setAttribute("spellcheck", "false");
+  }
+
   applyTheme();
   syncFrame();
 

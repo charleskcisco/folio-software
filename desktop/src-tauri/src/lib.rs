@@ -84,17 +84,34 @@ fn disable_writing_tools(window: &tauri::WebviewWindow) {
     use objc2::runtime::AnyObject;
     use objc2::{msg_send, sel};
 
-    let _ = window.with_webview(|wv| unsafe {
+    // Reported rather than swallowed. Both failure paths here are silent
+    // by nature -- with_webview can error, and respondsToSelector can be
+    // false -- and a silent no-op looks identical to a fix that worked.
+    //
+    // Deliberately minimal: objc2's msg_send! verifies method signatures
+    // against the runtime under debug_assertions, so introspection that
+    // looks harmless (asking an object for its class name) aborts the
+    // process on a type mismatch. Only the two calls that must happen
+    // happen here.
+    let outcome = window.with_webview(|wv| unsafe {
         let webview = wv.inner() as *mut AnyObject;
         if webview.is_null() {
+            eprintln!("[folio] writing tools: webview pointer was null");
             return;
         }
         let responds: bool = msg_send![webview, respondsToSelector: sel!(setWritingToolsBehavior:)];
-        if responds {
-            // NSWritingToolsBehaviorNone
-            let _: () = msg_send![webview, setWritingToolsBehavior: -1isize];
+        if !responds {
+            eprintln!("[folio] writing tools: webview does not respond to \
+                       setWritingToolsBehavior:; affordance left enabled");
+            return;
         }
+        // NSWritingToolsBehaviorNone
+        let _: () = msg_send![webview, setWritingToolsBehavior: -1isize];
+        eprintln!("[folio] writing tools: disabled");
     });
+    if let Err(e) = outcome {
+        eprintln!("[folio] writing tools: with_webview failed: {e}");
+    }
 }
 
 /// Log panics before they reach a frame that cannot unwind.
