@@ -4147,6 +4147,12 @@ def create_app(storage):
         if tail:
             hints.append(("class:hint.sep", "  ·  "))
             hints.extend(tail)
+        else:
+            # The shutdown hint carried a trailing space that kept the bar
+            # off the right edge. Without it the last word sits flush
+            # against the window, which looks like a clipped line rather
+            # than the end of a list.
+            hints.append(("class:hint", " "))
         return hints
 
     title_hints_window = VSplit([
@@ -4166,6 +4172,12 @@ def create_app(storage):
         if tail:
             hints.append(("class:hint.sep", "  ·  "))
             hints.extend(tail)
+        else:
+            # The shutdown hint carried a trailing space that kept the bar
+            # off the right edge. Without it the last word sits flush
+            # against the window, which looks like a clipped line rather
+            # than the end of a list.
+            hints.append(("class:hint", " "))
         return hints
 
     exports_title_window = VSplit([
@@ -4197,14 +4209,24 @@ def create_app(storage):
     def _get_narrow_browser_right_hints():
         hints = [("class:hint", "(e) exports"), _sep(),
                  ("class:hint", "(o) options"), _sep(),
-                 ("class:hint", "(^r) refresh"), _sep()]
-        hints.extend(_get_shutdown_hint())
+                 ("class:hint", "(^r) refresh")]
+        tail = _get_shutdown_hint()
+        if tail:
+            hints.append(_sep())
+            hints.extend(tail)
+        else:
+            hints.append(("class:hint", " "))
         return hints
 
     def _get_narrow_exports_right_hints():
         hints = [("class:hint", "(j) folio"), _sep(),
-                 ("class:hint", "(^r) refresh"), _sep()]
-        hints.extend(_get_shutdown_hint())
+                 ("class:hint", "(^r) refresh")]
+        tail = _get_shutdown_hint()
+        if tail:
+            hints.append(_sep())
+            hints.extend(tail)
+        else:
+            hints.append(("class:hint", " "))
         return hints
 
     # Narrow footers: per-item actions only. They drop the mode-switch
