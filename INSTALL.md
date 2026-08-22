@@ -1,5 +1,5 @@
 # Installing Folio
-The Folio releases allow you to use the writerdeck software on your computer. It allows you to create markdown files (.md) and export them in portable document format (.pdf) formatted according to the Chicago or Modern Language Association's style manuals.
+The Folio releases allow you to use the writerdeck software on your computer to create markdown files (.md) and export them in portable document format (.pdf) formatted according to the Chicago or Modern Language Association's style manuals.
 
 ## Which file do I download?
 **Windows:** `Folio_0.1.0_x64-setup.exe`
