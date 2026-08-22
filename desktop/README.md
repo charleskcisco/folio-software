@@ -73,3 +73,37 @@ starts.
 `codesign` fails with `AMFIUnserializeXML: syntax error`, and Tauri reports
 only "failed to sign app", which points nowhere near the real cause. That
 is why the explanation lives here instead.
+
+## macOS Writing Tools cannot be disabled from the app
+
+Apple Intelligence puts a floating "Writing Tools" button beside the
+insertion point in any editable text. In Folio it hovers over the grid and
+covers whatever character is under it, because a terminal that paints
+every cell has no empty layout for it to sit in.
+
+There is no way to switch it off from inside the application. Both routes
+were tried and neither works:
+
+- **`writingsuggestions="false"`** on the focused element. This is the
+  documented web-side control, and Writing Tools ignores it. Reapplying it
+  on mutation, on focus, and on window activation makes no difference.
+- **`writingToolsBehavior` on the web view.** This property belongs to
+  `NSTextView`, not `WKWebView`. Confirmed by asking the ObjC runtime:
+  `wry`'s `WryWebView` is a `WKWebView` subclass and does not respond to
+  `setWritingToolsBehavior:`.
+
+And the system's own off switch does not reach it either. With Apple
+Intelligence disabled through Screen Time content restrictions, every
+native application on the machine stopped showing the button and Folio did
+not -- in the signed, notarized build as well as the development one, so
+it is not an artifact of ad-hoc signing.
+
+That is the whole finding: the restriction is not propagating to WebKit's
+Writing Tools integration. It is a gap on Apple's side, not a switch we
+have failed to find, and no application-level code can out-rank a system
+restriction that is already being ignored.
+
+Nothing further was attempted, and nothing should be without new
+information -- the remaining ideas (private WebKit API, making xterm's
+input textarea non-editable) trade a floating button for a broken editor.
+Worth a Feedback Assistant report if it starts mattering.

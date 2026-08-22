@@ -66,54 +66,6 @@ fn set_window_background(window: tauri::WebviewWindow, color: String) -> Result<
         .map_err(|e| e.to_string())
 }
 
-/// Turn off macOS Writing Tools for this window.
-///
-/// Apple Intelligence puts a floating "Write with Siri" affordance beside
-/// the insertion point in any editable text. Folio is a full-screen
-/// terminal application that paints every cell itself, so the button
-/// hovers over the document, follows the cursor, and covers whatever
-/// character is underneath it -- there is no layout for it to sit in.
-///
-/// WKWebView has `writingToolsBehavior` for exactly this, but Tauri does
-/// not surface it, hence the raw message send through `with_webview`.
-/// Guarded by respondsToSelector: the property is macOS 15+, and on an
-/// older system this would otherwise be an unrecognised selector, which
-/// is a crash rather than a missing feature.
-#[cfg(target_os = "macos")]
-fn disable_writing_tools(window: &tauri::WebviewWindow) {
-    use objc2::runtime::AnyObject;
-    use objc2::{msg_send, sel};
-
-    // Reported rather than swallowed. Both failure paths here are silent
-    // by nature -- with_webview can error, and respondsToSelector can be
-    // false -- and a silent no-op looks identical to a fix that worked.
-    //
-    // Deliberately minimal: objc2's msg_send! verifies method signatures
-    // against the runtime under debug_assertions, so introspection that
-    // looks harmless (asking an object for its class name) aborts the
-    // process on a type mismatch. Only the two calls that must happen
-    // happen here.
-    let outcome = window.with_webview(|wv| unsafe {
-        let webview = wv.inner() as *mut AnyObject;
-        if webview.is_null() {
-            eprintln!("[folio] writing tools: webview pointer was null");
-            return;
-        }
-        let responds: bool = msg_send![webview, respondsToSelector: sel!(setWritingToolsBehavior:)];
-        if !responds {
-            eprintln!("[folio] writing tools: webview does not respond to \
-                       setWritingToolsBehavior:; affordance left enabled");
-            return;
-        }
-        // NSWritingToolsBehaviorNone
-        let _: () = msg_send![webview, setWritingToolsBehavior: -1isize];
-        eprintln!("[folio] writing tools: disabled");
-    });
-    if let Err(e) = outcome {
-        eprintln!("[folio] writing tools: with_webview failed: {e}");
-    }
-}
-
 /// Log panics before they reach a frame that cannot unwind.
 ///
 /// The abort message at that boundary is always "panic in a function that
@@ -192,14 +144,59 @@ pub fn run() {
     }
 
     builder
-        .setup(|_app| {
+        .setup(|app| {
+            // The window is built here rather than taken straight from
+            // tauri.conf.json (which sets create: false) so that a
+            // WKWebViewConfiguration can be attached to it.
+            //
+            // That configuration is the only way to decline Apple
+            // Intelligence Writing Tools. writingToolsBehavior lives on
+            // WKWebViewConfiguration, not on WKWebView, and it is read
+            // when the web view is constructed -- so it cannot be set
+            // afterwards. Every earlier attempt failed for that reason:
+            // the web view genuinely does not respond to the selector,
+            // because by then the decision has already been made.
             #[cfg(target_os = "macos")]
             {
-                use tauri::Manager;
-                if let Some(w) = _app.get_webview_window("main") {
-                    disable_writing_tools(&w);
-                }
+                use objc2::msg_send;
+                use objc2::MainThreadMarker;
+                use objc2_web_kit::WKWebViewConfiguration;
+
+                let config = app
+                    .config()
+                    .app
+                    .windows
+                    .iter()
+                    .find(|w| w.label == "main")
+                    .cloned()
+                    .ok_or("no window labelled 'main' in tauri.conf.json")?;
+
+                // setup() runs on the main thread, which is where AppKit
+                // objects must be created.
+                let mtm = MainThreadMarker::new()
+                    .ok_or("setup() was not on the main thread")?;
+                let wk_config = unsafe { WKWebViewConfiguration::new(mtm) };
+                // NSWritingToolsBehaviorNone
+                let _: () = unsafe { msg_send![&*wk_config, setWritingToolsBehavior: -1isize] };
+
+                tauri::WebviewWindowBuilder::from_config(app, &config)?
+                    .with_webview_configuration(wk_config)
+                    .build()?;
             }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let config = app
+                    .config()
+                    .app
+                    .windows
+                    .iter()
+                    .find(|w| w.label == "main")
+                    .cloned()
+                    .ok_or("no window labelled 'main' in tauri.conf.json")?;
+                tauri::WebviewWindowBuilder::from_config(app, &config)?.build()?;
+            }
+
             Ok(())
         })
         .manage(PtySession::default())

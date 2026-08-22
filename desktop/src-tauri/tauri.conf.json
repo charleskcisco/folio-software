@@ -21,7 +21,9 @@
         "resizable": true,
         "titleBarStyle": "Transparent",
         "backgroundColor": "#2a2a2a",
-        "theme": "Dark"
+        "theme": "Dark",
+        "label": "main",
+        "create": false
       }
     ],
     "security": {
