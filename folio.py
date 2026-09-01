@@ -4133,9 +4133,11 @@ def create_app(storage):
 
     def _exports_action_hints():
         S = ("class:hint.sep", "  ·  ")
+        actions = ("(↵) open  (⇧↵) reveal  (d) delete" if _is_desktop()
+                   else "(↵) print  (s) share  (d) delete")
         return [
             ("class:hint", " (/) search  (j) folio"), S,
-            ("class:hint", "(↵) print  (s) share  (d) delete"),
+            ("class:hint", actions),
         ]
 
     def _get_right_hints():
@@ -4498,10 +4500,21 @@ def create_app(storage):
         if path_str == "__empty__":
             return
         path = Path(path_str)
+        if _is_desktop():
+            # On a laptop the useful thing is the document, not a print
+            # queue: hand it to whatever opens PDFs there. Printing is
+            # still available from that application, which is where
+            # someone would look for it anyway.
+            if _open_externally(path):
+                show_notification(state, f"Opened {path.name}.")
+            else:
+                show_notification(state, f"Could not open {path.name}.")
+            return
         printers = _detect_printers()
         if not printers:
-            # The exports screen is print-only; do NOT fall back to a GUI
-            # opener (that just launches LibreOffice on a writerdeck).
+            # The exports screen is print-only on the deck; do NOT fall
+            # back to a GUI opener (that just launches LibreOffice on a
+            # writerdeck).
             show_notification(
                 state, "No printer found. Configure one in CUPS to print.")
             return
@@ -5916,6 +5929,35 @@ def create_app(storage):
 
         asyncio.ensure_future(_do())
 
+    # Shift+Enter on the exports screen: show the file in the system file
+    # manager rather than opening it.
+    #
+    # Bound to c-] because that is what the wrapper sends for Shift+Enter.
+    # A terminal cannot distinguish Enter from Shift+Enter -- both are a
+    # carriage return -- so main.ts translates it into something that can
+    # be told apart.
+    #
+    # Escape+Enter was the obvious encoding and does not work: several
+    # screens bind Escape with eager=True, so the Escape fires on arrival
+    # and the Enter then lands on whatever screen that left behind. c-] is
+    # a single keypress with no such competition, and nothing else here
+    # binds it.
+    @kb.add("c-]", filter=entry_list_focused)
+    def _(event):
+        if not (state.showing_exports and _is_desktop()):
+            return
+        idx = export_list.selected_index
+        if idx >= len(export_list.items):
+            return
+        path_str = export_list.items[idx][0]
+        if path_str == "__empty__":
+            return
+        path = Path(path_str)
+        if _reveal_in_file_manager(path):
+            show_notification(state, f"Revealed {path.name}.")
+        else:
+            show_notification(state, f"Could not reveal {path.name}.")
+
     @kb.add("d", filter=entry_list_focused)
     def _(event):
         if state.showing_exports:
@@ -7015,6 +7057,44 @@ def _key(k: str) -> str:
 def _keys(pairs):
     """Render a list of (key, description) rows."""
     return [(_key(k), d) for k, d in pairs]
+
+
+def _open_externally(path) -> bool:
+    """Hand a file to the desktop's default application."""
+    if sys.platform == "darwin":
+        cmd = ["open", str(path)]
+    elif sys.platform == "win32":
+        cmd = ["cmd", "/c", "start", "", str(path)]
+    else:
+        cmd = ["xdg-open", str(path)]
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _reveal_in_file_manager(path) -> bool:
+    """Show a file in the desktop's file manager, selected.
+
+    Linux has no standard "reveal" verb, so it opens the containing folder
+    instead -- close enough, and better than nothing.
+    """
+    if sys.platform == "darwin":
+        cmd = ["open", "-R", str(path)]
+    elif sys.platform == "win32":
+        # The comma is part of the syntax, not a separator. explorer also
+        # exits non-zero on success, so its status is not worth reading.
+        cmd = ["explorer", "/select,%s" % path]
+    else:
+        cmd = ["xdg-open", str(Path(path).parent)]
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def _scheme_colors(scheme: str) -> tuple[str, str]:

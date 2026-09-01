@@ -141,8 +141,23 @@ const SYSTEM_OWNED = new Set(["c", "v", "x", "a", "q", "h"]);
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
 term.attachCustomKeyEventHandler((e) => {
-  if (!isMac || !e.metaKey || e.ctrlKey || e.altKey) return true;
   if (e.type !== "keydown") return true;
+
+  // Shift+Enter, made distinguishable. A terminal sends a carriage return
+  // for both Enter and Shift+Enter, so an application cannot tell them
+  // apart; this sends c-] (0x1d) instead, which Folio binds on the
+  // exports screen to reveal a file in the file manager.
+  //
+  // Not ESC CR, which was tried: Folio binds Escape eagerly on several
+  // screens, so the Escape fired on its own and the Enter then acted on
+  // whatever screen that left behind -- opening an unrelated note.
+  if (e.key === "Enter" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    write([0x1d]);
+    e.preventDefault();
+    return false;
+  }
+
+  if (!isMac || !e.metaKey || e.ctrlKey || e.altKey) return true;
 
   const key = e.key.toLowerCase();
 
