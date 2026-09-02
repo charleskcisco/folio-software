@@ -111,6 +111,30 @@ cd ~/folio-software && ./install-typst.sh
 Fresh installs start on typst; migrated ones do not. That is the intended
 difference, not an oversight.
 
+## Check nothing is missing
+
+Migration installs no system tools. `setup.sh` does the Python side and
+`device-setup.sh` does the launcher; neither touches pandoc, typst,
+aspell, filebrowser and the rest. A deck keeps whatever it already had, so
+one built before a tool was added will silently lack it -- and the
+failures are quiet, since an absent tool disables one feature and says
+nothing until someone reaches for it.
+
+```
+cd ~/folio-software && ./doctor.sh
+```
+
+It lists every external tool Folio uses and what each one is for. To
+install only the gaps:
+
+```
+./doctor.sh --fix
+```
+
+Use that rather than `app-setup.sh`, which reinstalls everything --
+LibreOffice included -- and reboots. On a Pi Zero that is an hour for a
+result `--fix` reaches in a minute.
+
 ## Checking it worked
 
 - The top-left says **Folio**
