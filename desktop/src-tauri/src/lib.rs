@@ -2,47 +2,47 @@ mod pty;
 
 use pty::PtySession;
 
-/// Where the frozen Folio binary lives.
+/// Where the frozen Folio executable lives.
 ///
-/// Bundled, it is a Tauri sidecar: declared as an externalBin, named with
-/// the target triple in the repo, and placed beside the app executable
-/// with the triple stripped. Resolving it from `current_exe` is what makes
-/// the app portable -- it holds wherever the bundle is copied to, and it
-/// is the same shape on every platform, so Windows needs no special case
-/// beyond the .exe suffix.
+/// Folio ships as a folder (PyInstaller --onedir) that Tauri bundles as a
+/// resource: Contents/Resources/folio/ on macOS, folio\ beside the app on
+/// Windows. The folder rather than a single self-extracting file is what
+/// makes startup instant -- see freeze.sh.
 ///
-/// It was previously a bundle.resources entry, which Tauri rewrote from
-/// `../../dist/folio` to `Contents/Resources/_up_/_up_/dist/folio`. The
-/// lookup expected `Contents/Resources/folio`, missed, and fell through to
-/// the development path below -- an absolute path into the source tree,
-/// baked in at compile time. The .app ran perfectly on the machine that
-/// built it and could not have run anywhere else.
-fn folio_binary() -> String {
+/// Resolved from the resource directory, never from a path baked in at
+/// compile time. An earlier layout missed its lookup and fell through to
+/// an absolute path into the source tree, so the .app ran perfectly on the
+/// machine that built it and could not have run anywhere else. The source
+/// tree fallback below now exists only in debug builds for that reason.
+fn folio_binary(app: &tauri::AppHandle) -> String {
+    use tauri::Manager;
     let name = if cfg!(target_os = "windows") { "folio.exe" } else { "folio" };
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(sidecar) = exe.parent().map(|d| d.join(name)) {
-            if sidecar.is_file() {
-                return sidecar.to_string_lossy().into_owned();
-            }
+    if let Ok(dir) = app.path().resource_dir() {
+        let bundled = dir.join("folio").join(name);
+        if bundled.is_file() {
+            return bundled.to_string_lossy().into_owned();
         }
     }
 
-    // Development: ../dist/folio relative to the desktop/ directory, so
-    // `npm run tauri dev` works against a source checkout.
-    let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join("dist").join(name));
-    match dev {
-        Some(p) if p.is_file() => p.to_string_lossy().into_owned(),
-        _ => name.to_string(),
+    #[cfg(debug_assertions)]
+    {
+        // `npm run tauri dev` against a source checkout that has frozen
+        // but not yet had Tauri copy the folder in.
+        let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("folio-dist")
+            .join(name);
+        if dev.is_file() {
+            return dev.to_string_lossy().into_owned();
+        }
     }
+
+    name.to_string()
 }
 
 #[tauri::command(async)]
-fn folio_path() -> String {
-    folio_binary()
+fn folio_path(app: tauri::AppHandle) -> String {
+    folio_binary(&app)
 }
 
 /// Paint the window -- and with a transparent title bar, the title bar --

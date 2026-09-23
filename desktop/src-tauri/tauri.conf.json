@@ -7,6 +7,7 @@
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
+    "beforeBundleCommand": "node scripts/sign-folio.mjs",
     "frontendDist": "../dist"
   },
   "app": {
@@ -42,9 +43,9 @@
     ],
     "category": "Productivity",
     "shortDescription": "Distraction-free composition",
-    "externalBin": [
-      "binaries/folio"
-    ],
+    "resources": {
+      "folio-dist/": "folio/"
+    },
     "macOS": {
       "hardenedRuntime": true,
       "entitlements": "entitlements.plist"

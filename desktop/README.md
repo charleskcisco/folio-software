@@ -6,38 +6,65 @@ This template should help get you started developing with Tauri in vanilla HTML,
 
 - [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
 
+## How Folio is packaged
+
+Folio is frozen by `../freeze.sh` into a folder (PyInstaller `--onedir`),
+staged at `src-tauri/folio-dist/`, and shipped as a bundle resource:
+`Contents/Resources/folio/` on macOS, `folio\` beside the app on Windows.
+`lib.rs` resolves it from the resource directory.
+
+It was originally a single `--onefile` executable. That is a
+self-extracting archive: every launch unpacked ~190MB into a fresh temp
+directory before Folio ran, which was the 3-5 seconds of blank window at
+startup, and a launch that was killed rather than quit left the directory
+behind. The folder starts in under 0.2s (after macOS has scanned a new
+install once) and writes nothing to temp.
+
+`folio-dist/TRIPLE` records the architecture the folder holds, and
+`build.rs` refuses to build for any other target. freeze.sh reads the
+architecture off the frozen binary with `lipo` rather than assuming the
+host's, and refreshes only the copies under `target/` belonging to that
+architecture, so an Intel freeze cannot leave the native dev app running
+an x86_64 Folio under Rosetta.
+
+## Python toolchains (macOS)
+
+Both Mac builds freeze with **python-build-standalone**, not Homebrew or
+python.org. Those are framework builds: a folder frozen from one carries
+`Python.framework`, symlinks and ~60 binaries that each need signing, and
+freeze.sh refuses it. A standalone Python freezes to four binaries (five
+with Homebrew's pandoc, which brings `libgmp`) in a plain folder.
+
+The toolchains live in `builds/` (untracked) and freeze.sh uses the one
+matching the architecture it runs as, with no environment variables:
+
+| Toolchain | Contents |
+| --- | --- |
+| `builds/arm64-toolchain/` | `python/` — cpython 3.12 aarch64-apple-darwin |
+| `builds/intel-toolchain/` | `python/` — cpython 3.12 x86_64-apple-darwin; `bin/` — pandoc 3.10 x86_64-macOS, typst v0.15.1 x86_64-apple-darwin |
+
+The Pythons come from `astral-sh/python-build-standalone` (the
+`install_only` archives), then `python3.12 -m pip install prompt_toolkit
+pygments pyinstaller pytest`. 3.12 matches CI: the version the binary
+embeds is the version students run, so it should not differ between
+architectures. pandoc and typst come from `jgm/pandoc` and
+`typst/typst` releases. A toolchain without `bin/` falls back to the
+pandoc and typst on `PATH`.
+
 ## Building for Intel Macs
 
 Intel builds are made here, not on CI: `macos-13` was retired and every
 replacement Intel runner is a "larger runner", which GitHub bills even on
-public repositories. Rosetta does the job for nothing.
-
-PyInstaller freezes for the architecture of the interpreter running it, so
-the Intel build needs an x86_64 Python and x86_64 copies of pandoc and
-typst. They live in `builds/intel-toolchain/` (untracked, ~180MB) and are
-reconstructible from:
-
-- `astral-sh/python-build-standalone` — cpython 3.12 x86_64-apple-darwin
-  (3.12 to match CI; the version the binary embeds is the version students
-  run, so it should not differ between architectures)
-- `jgm/pandoc` — pandoc 3.10 x86_64-macOS
-- `typst/typst` — typst v0.15.1 x86_64-apple-darwin
-
-Then:
+public repositories. Rosetta does the job for nothing:
 
 ```
-arch -x86_64 env \
-  FOLIO_PYTHON="$PWD/builds/intel-toolchain/python/bin/python3.12" \
-  FOLIO_TOOLS_DIR="$PWD/builds/intel-toolchain/bin" \
-  ./freeze.sh
+arch -x86_64 ./freeze.sh
 cd desktop && APPLE_SIGNING_IDENTITY="..." npm run tauri build -- --target x86_64-apple-darwin
 ```
 
-freeze.sh reads the frozen binary's architecture with `lipo` and names the
-sidecar accordingly, so a cross build cannot end up staged under the host's
-triple. It also refreshes only the copies belonging to the target it built,
-which is what stops an Intel freeze from leaving the native app running an
-x86_64 sidecar under Rosetta.
+Re-run plain `./freeze.sh` afterwards before going back to the native app:
+only one architecture is staged at a time, and `build.rs` will say so if
+you forget.
 
 ## Signing (macOS)
 
@@ -61,12 +88,20 @@ and `notarytool` rejects the wrong one with an unhelpful 403.
 
 
 `src-tauri/entitlements.plist` grants one entitlement,
-`com.apple.security.cs.disable-library-validation`. Folio is a PyInstaller
-onefile binary: at launch it unpacks Python and its `.so` files into a temp
-directory and loads them from there. Under the hardened runtime, library
-validation refuses to load code not signed by the same team, so without
-this the app signs cleanly, notarises cleanly, and then dies the instant it
-starts.
+`com.apple.security.cs.disable-library-validation`, to the frozen `folio`
+executable. It is kept from the onefile days, when Python and its
+libraries were unpacked into a temp directory and loaded from there, and
+library validation killed the process the instant it started. The folder
+layout loads a `libpython` signed by the same team, so it may no longer be
+needed -- but removing it means another notarization round-trip to find
+out, for no gain a student would notice.
+
+Tauri signs the app and nothing inside its resources, so
+`scripts/sign-folio.mjs` runs as the `beforeBundleCommand` and signs every
+Mach-O file in `folio-dist/` with the same identity, the hardened runtime
+and a timestamp. Without it the binaries keep PyInstaller's ad-hoc
+signature and notarization rejects the app. It does nothing when
+`APPLE_SIGNING_IDENTITY` is unset.
 
 **Do not put XML comments in that file.** Apple's entitlements parser
 (AMFI) is stricter than a normal plist parser and rejects them outright —

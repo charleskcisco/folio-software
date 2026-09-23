@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# Freeze Folio into a single executable for the desktop wrapper to spawn.
+# Freeze Folio into a folder the desktop wrapper ships and spawns.
+#
+# --onedir, not --onefile. A onefile build is a self-extracting archive:
+# every launch unpacked ~190MB into a fresh temp directory before Folio
+# ran a line, which was the 3-5 seconds of blank window at startup -- and
+# a launch that was killed rather than quit left that directory behind,
+# so a student's disk filled by 190MB a time. The folder build starts in
+# a tenth of a second and leaves nothing behind.
 #
 # The --add-data list is the whole point of this script. Every one of
 # these directories is read at export time rather than imported, so
@@ -37,9 +44,32 @@ esac
 # FOLIO_PYTHON picks the interpreter, which matters for universal builds:
 # PyInstaller freezes for the architecture of the interpreter running it,
 # so a universal2 binary needs a universal2 Python and nothing else will
-# do. CI installs one from python.org and points this at it.
+# do.
+#
+# On a Mac, a standalone toolchain under builds/ is preferred when one
+# exists for the architecture this script is running as (so under
+# `arch -x86_64` it picks the Intel one). Homebrew's and python.org's
+# Pythons are framework builds, and a folder frozen from one carries
+# Python.framework with it: symlinks, dozens of extra binaries to sign,
+# and a Python version that drifts from the one being shipped. The
+# standalone build freezes to four binaries and a plain folder.
+# desktop/README.md says how to rebuild the toolchains.
+TOOLCHAIN=""
+if [ "$(uname -s)" = "Darwin" ]; then
+  case "$(uname -m)" in
+    arm64)  TOOLCHAIN="builds/arm64-toolchain" ;;
+    x86_64) TOOLCHAIN="builds/intel-toolchain" ;;
+  esac
+  [ -x "${TOOLCHAIN}/python/bin/python3.12" ] || TOOLCHAIN=""
+fi
+if [ -n "$TOOLCHAIN" ]; then
+  [ -z "${FOLIO_PYTHON:-}" ] && FOLIO_PYTHON="$PWD/${TOOLCHAIN}/python/bin/python3.12"
+  [ -z "${FOLIO_TOOLS_DIR:-}" ] && [ -d "${TOOLCHAIN}/bin" ] && FOLIO_TOOLS_DIR="$PWD/${TOOLCHAIN}/bin"
+fi
+
 PY="${FOLIO_PYTHON:-}"
 [ -n "$PY" ] && [ ! -x "$PY" ] && { echo "error: FOLIO_PYTHON=$PY is not executable." >&2; exit 1; }
+[ -n "$PY" ] && echo "Freezing with $PY"
 [ -n "$PY" ] || for candidate in .venv/bin/python .venv/Scripts/python.exe python3 python; do
   if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
     PY="$candidate"; break
@@ -98,7 +128,15 @@ if [ "${FOLIO_UNIVERSAL:-}" = "1" ]; then
   echo "Building universal2 (Intel + Apple Silicon)"
 fi
 
-"$PY" -m PyInstaller --noconfirm --onefile --name folio ${ARCH_ARGS} \
+# A previous build may have left dist/folio as a *file* -- the onefile
+# layout -- and PyInstaller will not replace a file with a directory.
+#
+# The staged copy goes too, before anything can fail. A freeze that stops
+# halfway must not leave the last build staged: build.rs would accept it,
+# and the app would ship it in place of the build that just failed.
+rm -rf "dist/folio" "dist/folio${EXE}" desktop/src-tauri/folio-dist desktop/src-tauri/binaries
+
+"$PY" -m PyInstaller --noconfirm --onedir --name folio ${ARCH_ARGS} \
   --add-data "templates${SEP}templates" \
   --add-data "fonts${SEP}fonts" \
   --add-data "csl${SEP}csl" \
@@ -107,15 +145,36 @@ fi
   --add-binary "${TYPST}${SEP}bin" \
   folio.py
 
-# Stage the sidecar for the desktop wrapper.
+BUILT="dist/folio/folio${EXE}"
+[ -f "$BUILT" ] || { echo "error: PyInstaller finished but $BUILT is missing." >&2; exit 1; }
+
+# A framework Python leaves Python.framework, symlinks and all, inside the
+# folder. sign-folio.mjs signs loose binaries, not nested bundles, so that
+# layout builds, runs here, and then fails notarization -- stop now rather
+# than an hour from now.
+if [ "$(uname -s)" = "Darwin" ] && [ -n "$(find dist/folio -type l -print -quit)" ]; then
+  echo "error: dist/folio contains symlinks, so $PY is a framework build" >&2
+  echo "       (Homebrew and python.org Pythons both are). Freeze with a" >&2
+  echo "       python-build-standalone interpreter -- see desktop/README.md." >&2
+  exit 1
+fi
+
+# Stage the folder for the desktop wrapper.
 #
-# Tauri resolves an externalBin by target triple and drops it beside the
-# app executable, which is the only layout that survives being moved to
-# another machine. The previous bundle.resources route mangled
-# ../../dist/folio into Contents/Resources/_up_/_up_/dist/folio, which the
-# lookup missed -- so the app silently fell back to an absolute path into
-# this source tree and ran correctly here and nowhere else.
-SIDECAR_DIR="desktop/src-tauri/binaries"
+# Tauri ships it as a bundle resource (tauri.conf.json maps folio-dist/ to
+# folio/), which lands in Contents/Resources/folio on macOS and beside the
+# executable on Windows. It is staged under src-tauri rather than pointed
+# at dist/ directly because a resource path that climbs out of src-tauri
+# is rewritten -- ../../dist/folio became Contents/Resources/_up_/_up_/,
+# which the lookup missed, and the app silently fell back to an absolute
+# path into this source tree: it ran on the machine that built it and on
+# no other.
+#
+# TRIPLE records what the folder holds. build.rs refuses to build an app
+# for one architecture around a Folio for another, which is otherwise a
+# silent mistake: an Intel Folio inside an Apple Silicon app runs, under
+# Rosetta, slowly, and nothing says why.
+STAGE="desktop/src-tauri/folio-dist"
 
 detect_triple() {
   local candidate t
@@ -129,13 +188,11 @@ detect_triple() {
 }
 
 # What was built is not necessarily what the host is. An Intel build made
-# on an Apple Silicon Mac under Rosetta is still an Intel binary, and
-# Tauri looks for the sidecar under the target it was asked to build -- so
-# ask the binary what it actually is rather than assuming it matches the
-# machine that produced it. Getting this wrong is silent: the wrong-named
-# sidecar simply is not found, and the app falls back to something else.
+# on an Apple Silicon Mac under Rosetta is still an Intel binary, so ask
+# the binary what it is rather than assuming it matches the machine that
+# produced it.
 if [ -z "${EXE}" ] && command -v lipo >/dev/null 2>&1; then
-  ARCHS="$(lipo -archs "dist/folio${EXE}" 2>/dev/null || true)"
+  ARCHS="$(lipo -archs "$BUILT" 2>/dev/null || true)"
   case "$ARCHS" in
     *arm64*x86_64*|*x86_64*arm64*) FORCED_TRIPLE="universal-apple-darwin" ;;
     *x86_64*)                      FORCED_TRIPLE="x86_64-apple-darwin" ;;
@@ -143,55 +200,46 @@ if [ -z "${EXE}" ] && command -v lipo >/dev/null 2>&1; then
   esac
 fi
 
-if TRIPLE="${FORCED_TRIPLE:-$(detect_triple)}" && [ -n "$TRIPLE" ]; then
-  mkdir -p "$SIDECAR_DIR"
-  cp "dist/folio${EXE}" "${SIDECAR_DIR}/folio-${TRIPLE}${EXE}"
-  chmod +x "${SIDECAR_DIR}/folio-${TRIPLE}${EXE}" 2>/dev/null || true
-  echo "Staged sidecar ${SIDECAR_DIR}/folio-${TRIPLE}${EXE}"
-
-  # Refresh the copies Tauri has already made. It only re-copies an
-  # externalBin when it rebuilds, and editing Python does not trigger a
-  # Rust rebuild -- so without this a freeze succeeds, reports success,
-  # and the desktop app carries on running the previous binary. That has
-  # burned an afternoon twice: the fix looks like it did not work, and
-  # the thing being tested is not the thing that was built.
-  #
-  # Only refresh what already exists. A missing copy means Tauri has not
-  # built yet, and it will take the staged sidecar when it does.
-  # Refresh only the copies this build is actually for.
-  #
-  # Tauri puts a --target build under target/<triple>/ and a native one
-  # directly under target/. Refreshing both unconditionally means a cross
-  # build overwrites the native copy: freezing for Intel on an Apple
-  # Silicon Mac would leave the arm64 app running an x86_64 sidecar, which
-  # works -- under Rosetta, slowly, silently -- until it does not.
-  HOST_TRIPLE="$(detect_triple || true)"
-  REFRESH_DIRS="desktop/src-tauri/target/${TRIPLE}"
-  [ "$TRIPLE" = "$HOST_TRIPLE" ] && REFRESH_DIRS="$REFRESH_DIRS desktop/src-tauri/target"
-
-  for dir in $REFRESH_DIRS; do
-    for build in debug release; do
-      copy="${dir}/${build}/folio${EXE}"
-      if [ -f "$copy" ]; then
-        cp "dist/folio${EXE}" "$copy"
-        chmod +x "$copy" 2>/dev/null || true
-        echo "Refreshed ${copy}"
-      fi
-    done
-  done
-else
-  # Never leave a stale sidecar behind. The wrapper resolves Folio from
-  # beside its own executable, so an old copy here is not inert -- Tauri
-  # copies it into the build and the app runs it, silently, in place of
-  # the build that just happened. Warning and continuing meant a freeze
-  # could appear to succeed while changing nothing that ran.
-  rm -f "${SIDECAR_DIR}"/folio-*
-  echo "error: cannot determine the Rust host triple (rustc not found)." >&2
-  echo "       Removed any stale sidecar rather than leave the wrapper" >&2
-  echo "       running an older Folio. Install rustup and re-run." >&2
+if ! TRIPLE="${FORCED_TRIPLE:-$(detect_triple)}" || [ -z "$TRIPLE" ]; then
+  echo "error: cannot determine the Rust target triple (rustc not found)." >&2
+  echo "       Nothing staged; install rustup and re-run." >&2
   exit 1
 fi
 
+cp -R "dist/folio" "$STAGE"
+printf '%s\n' "$TRIPLE" > "${STAGE}/TRIPLE"
+echo "Staged ${STAGE} for ${TRIPLE}"
+
+# Refresh the copies Tauri has already made. It copies resources when the
+# Rust side builds, and editing Python does not trigger a Rust build -- so
+# without this a freeze succeeds and the desktop app carries on running
+# the previous Folio. The fix looks like it did not work, and the thing
+# being tested is not the thing that was built.
+#
+# Only refresh what already exists (a missing copy means Tauri has not
+# built yet, and it will take the staged folder when it does), and only
+# the copies this build is for: a --target build lives under
+# target/<triple>/, a native one directly under target/, and refreshing
+# both would let an Intel freeze overwrite the Apple Silicon dev copy.
+HOST_TRIPLE="$(detect_triple || true)"
+REFRESH_DIRS="desktop/src-tauri/target/${TRIPLE}"
+[ "$TRIPLE" = "$HOST_TRIPLE" ] && REFRESH_DIRS="$REFRESH_DIRS desktop/src-tauri/target"
+
+for dir in $REFRESH_DIRS; do
+  for build in debug release; do
+    [ -d "${dir}/${build}" ] || continue
+    copy="${dir}/${build}/folio"
+    # The onefile layout put a single executable here, and _up_ is where
+    # the old resources route mangled its copy to. Both are dead weight
+    # that Tauri would trip over when copying the folder in.
+    rm -rf "${dir}/${build}/_up_" "${dir}/${build}/folio.exe"
+    if [ -e "$copy" ]; then
+      rm -rf "$copy"
+      cp -R "$STAGE" "$copy"
+      echo "Refreshed ${copy}"
+    fi
+  done
+done
+
 echo
-echo "Built dist/folio${EXE} ($(du -h "dist/folio${EXE}" | cut -f1))"
-echo "Verify resources with: ./freeze.sh --check"
+echo "Built dist/folio/ ($(du -sh "dist/folio" | cut -f1))"
