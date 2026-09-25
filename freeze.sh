@@ -117,6 +117,36 @@ TYPST="$(resolve_tool typst)"
 echo "Bundling pandoc: $PANDOC"
 echo "Bundling typst:  $TYPST"
 
+# aspell is bundled as a whole directory -- the program plus its data and
+# dictionaries -- because it is useless without them and looks them up in
+# paths compiled into the binary. folio.py's _aspell_argv points it at the
+# bundled copy. Without this a student's spell check reports "aspell not
+# found", which on the deck is an apt install and on their laptop is a dead
+# end.
+#
+# FOLIO_ASPELL_DIR wins; otherwise the toolchain's aspell/, which
+# desktop/scripts/build-aspell.sh produces. CI's Windows job assembles one
+# from MSYS2.
+ASPELL_DIR="${FOLIO_ASPELL_DIR:-}"
+[ -z "$ASPELL_DIR" ] && [ -n "$TOOLCHAIN" ] && ASPELL_DIR="$PWD/${TOOLCHAIN}/aspell"
+ASPELL_BIN="${ASPELL_DIR}/bin/aspell${EXE}"
+ASPELL_DATA="${ASPELL_DIR}/lib/aspell-0.60"
+if [ -z "$ASPELL_DIR" ] || [ ! -x "$ASPELL_BIN" ]; then
+  echo "error: no aspell to bundle (looked for '${ASPELL_BIN}')." >&2
+  echo "       Build one with desktop/scripts/build-aspell.sh <toolchain>/aspell," >&2
+  echo "       or point FOLIO_ASPELL_DIR at one." >&2
+  exit 1
+fi
+# Prove it works before shipping it: a copy that cannot find its
+# dictionaries fails silently in Folio -- every word comes back correct.
+if ! printf 'recieve\n' | "$ASPELL_BIN" --data-dir="$ASPELL_DATA" --dict-dir="$ASPELL_DATA" \
+     list --lang=en_US 2>&1 | tr -d '\r' | grep -qx recieve; then
+  echo "error: ${ASPELL_BIN} does not flag 'recieve' with en_US from" >&2
+  echo "       ${ASPELL_DATA}; its dictionaries are missing or broken." >&2
+  exit 1
+fi
+echo "Bundling aspell: $ASPELL_DIR"
+
 # FOLIO_UNIVERSAL=1 asks for a binary that runs on both Intel and Apple
 # Silicon Macs. PyInstaller refuses unless *everything* it collects is
 # universal2 -- the interpreter, its extension modules, and the pandoc and
@@ -141,6 +171,7 @@ rm -rf "dist/folio" "dist/folio${EXE}" desktop/src-tauri/folio-dist desktop/src-
   --add-data "fonts${SEP}fonts" \
   --add-data "csl${SEP}csl" \
   --add-data "refs${SEP}refs" \
+  --add-data "${ASPELL_DIR}${SEP}aspell" \
   --add-binary "${PANDOC}${SEP}bin" \
   --add-binary "${TYPST}${SEP}bin" \
   folio.py
@@ -157,6 +188,31 @@ if [ "$(uname -s)" = "Darwin" ] && [ -n "$(find dist/folio -type l -print -quit)
   echo "       (Homebrew and python.org Pythons both are). Freeze with a" >&2
   echo "       python-build-standalone interpreter -- see desktop/README.md." >&2
   exit 1
+fi
+
+# Nothing bundled may need a newer macOS than the students have. A binary
+# records the oldest macOS it will start on, and a Homebrew one records
+# the version of the Mac that built it: 0.1.0 and 0.1.1 shipped Homebrew's
+# pandoc, which needed macOS 26, so on Sequoia the app opened, edited, and
+# failed every single export. macOS gives no hint why.
+MACOS_FLOOR="${FOLIO_MACOS_FLOOR:-15.0}"
+if [ "$(uname -s)" = "Darwin" ]; then
+  too_new=""
+  while IFS= read -r f; do
+    minos="$(otool -l "$f" | awk '/LC_BUILD_VERSION/{b=1} b&&/minos/{print $2; exit}')"
+    [ -n "$minos" ] || continue
+    if "$PY" -c "import sys; a,b=(tuple(map(int,v.split('.'))) for v in sys.argv[1:]); sys.exit(a<=b)" \
+         "$minos" "$MACOS_FLOOR"; then
+      too_new="${too_new}       ${f#dist/folio/} needs macOS ${minos}"$'\n'
+    fi
+  done < <(find dist/folio -type f -perm -u+x -o -type f -name '*.dylib')
+  if [ -n "$too_new" ]; then
+    echo "error: these need a newer macOS than ${MACOS_FLOOR} (FOLIO_MACOS_FLOOR):" >&2
+    printf '%s' "$too_new" >&2
+    echo "       Homebrew builds for the Mac it runs on; use the projects' own" >&2
+    echo "       release binaries in the toolchain's bin/ -- see desktop/README.md." >&2
+    exit 1
+  fi
 fi
 
 # Stage the folder for the desktop wrapper.

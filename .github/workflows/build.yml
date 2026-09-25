@@ -128,6 +128,47 @@ jobs:
           pandoc --version | head -1
           typst --version
 
+      # aspell, for spell check; freeze.sh finds it through
+      # FOLIO_ASPELL_DIR. The Mac builds it from source with the script
+      # the local release builds use. Windows takes MSYS2's and copies out
+      # the program, the DLLs it links and its dictionaries into the same
+      # layout: bin/ for the program, lib/aspell-0.60/ for the data.
+      - name: Build aspell (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          desktop/scripts/build-aspell.sh "$RUNNER_TEMP/aspell"
+          echo "FOLIO_ASPELL_DIR=$RUNNER_TEMP/aspell" >> "$GITHUB_ENV"
+
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-aspell mingw-w64-x86_64-aspell-en
+
+      - name: Assemble aspell (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -eux
+          out="$(cygpath -u "$RUNNER_TEMP")/aspell"
+          mkdir -p "$out/bin" "$out/lib/aspell-0.60"
+          cp /mingw64/bin/aspell.exe "$out/bin/"
+          # Asked of aspell rather than assumed, like the pandoc and typst
+          # paths above. Data and dictionaries are merged into one
+          # directory because folio.py passes the same path for both.
+          for key in data-dir dict-dir; do
+            cp -r "$(aspell config "$key")"/. "$out/lib/aspell-0.60/"
+          done
+          # The DLLs that aspell and its filter modules link from MSYS2's
+          # tree; the rest belong to Windows. They sit beside aspell.exe,
+          # the one directory Windows always searches.
+          ldd /mingw64/bin/aspell.exe "$out"/lib/aspell-0.60/*.dll 2>/dev/null \
+            | awk '$3 ~ "^/mingw64/" {print $3}' | sort -u \
+            | xargs -r cp -t "$out/bin/"
+          ls -la "$out/bin"
+          echo "FOLIO_ASPELL_DIR=$(cygpath -m "$out")" >> "$GITHUB_ENV"
+
       # bash on Windows too: the runners ship Git Bash, and freeze.sh
       # handles the platform differences itself (the .exe suffix and
       # PyInstaller's ';' data separator).

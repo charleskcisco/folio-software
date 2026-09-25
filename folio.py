@@ -2427,10 +2427,33 @@ async def show_dialog_as_float(state, dialog):
     return result
 
 
+def _aspell_argv(*args: str) -> list:
+    """The aspell command line, pointed at the bundled copy when there is one.
+
+    The desktop app ships aspell and its English dictionaries in aspell/
+    beside this script, because a student's Mac or PC has no aspell to
+    find. aspell looks its dictionaries up in directories compiled into the
+    binary -- paths on the machine that built it -- so the bundled copy is
+    told where they really are. Its personal word list goes in the home
+    directory, as the system aspell's does: Windows sets no HOME for it to
+    find on its own.
+
+    A source checkout has no aspell/ directory, so the deck runs the system
+    aspell exactly as it always has.
+    """
+    root = _APP_DIR / "aspell"
+    exe = root / "bin" / ("aspell.exe" if sys.platform == "win32" else "aspell")
+    if exe.is_file():
+        data = root / "lib" / "aspell-0.60"
+        return [str(exe), f"--data-dir={data}", f"--dict-dir={data}",
+                f"--home-dir={Path.home()}", *args]
+    return ["aspell", *args]
+
+
 def _aspell_dicts():
     """Installed aspell dictionary names, or [] when unavailable."""
     try:
-        r = subprocess.run(["aspell", "dump", "dicts"],
+        r = subprocess.run(_aspell_argv("dump", "dicts"),
                            capture_output=True, text=True, timeout=5)
         if r.returncode == 0:
             return sorted(set(r.stdout.split()))
@@ -3828,8 +3851,8 @@ class SpellCheckPanel:
     async def _add_to_dict_async(self, word):
         try:
             proc = await asyncio.create_subprocess_exec(
-                "aspell", "-a",
-                f"--lang={self.state.spell_lang or 'en_US'}",
+                *_aspell_argv("-a",
+                              f"--lang={self.state.spell_lang or 'en_US'}"),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -6667,8 +6690,8 @@ def create_app(storage):
                     spell_text = re.sub(r"@\S+", lambda m: " " * len(m.group()), spell_text)
                     try:
                         proc = await asyncio.create_subprocess_exec(
-                            "aspell", "list",
-                            f"--lang={state.spell_lang or 'en_US'}",
+                            *_aspell_argv("list",
+                                          f"--lang={state.spell_lang or 'en_US'}"),
                             stdin=asyncio.subprocess.PIPE,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.DEVNULL,
@@ -6687,8 +6710,8 @@ def create_app(storage):
                     sugg_map = {}
                     try:
                         proc2 = await asyncio.create_subprocess_exec(
-                            "aspell", "-a",
-                            f"--lang={state.spell_lang or 'en_US'}",
+                            *_aspell_argv("-a",
+                                          f"--lang={state.spell_lang or 'en_US'}"),
                             stdin=asyncio.subprocess.PIPE,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.DEVNULL,

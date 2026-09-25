@@ -27,29 +27,48 @@ host's, and refreshes only the copies under `target/` belonging to that
 architecture, so an Intel freeze cannot leave the native dev app running
 an x86_64 Folio under Rosetta.
 
-## Python toolchains (macOS)
+## Toolchains (macOS)
 
-Both Mac builds freeze with **python-build-standalone**, not Homebrew or
-python.org. Those are framework builds: a folder frozen from one carries
-`Python.framework`, symlinks and ~60 binaries that each need signing, and
-freeze.sh refuses it. A standalone Python freezes to four binaries (five
-with Homebrew's pandoc, which brings `libgmp`) in a plain folder.
-
-The toolchains live in `builds/` (untracked) and freeze.sh uses the one
-matching the architecture it runs as, with no environment variables:
+Everything bundled into a Mac build comes from a toolchain in `builds/`
+(untracked). freeze.sh uses the one matching the architecture it runs as,
+with no environment variables:
 
 | Toolchain | Contents |
 | --- | --- |
-| `builds/arm64-toolchain/` | `python/` — cpython 3.12 aarch64-apple-darwin |
-| `builds/intel-toolchain/` | `python/` — cpython 3.12 x86_64-apple-darwin; `bin/` — pandoc 3.10 x86_64-macOS, typst v0.15.1 x86_64-apple-darwin |
+| `builds/arm64-toolchain/` | `python/` — cpython 3.12 aarch64; `bin/` — pandoc 3.10 arm64-macOS, typst 0.15.1; `aspell/` |
+| `builds/intel-toolchain/` | `python/` — cpython 3.12 x86_64; `bin/` — pandoc 3.10 x86_64-macOS, typst v0.15.1 x86_64-apple-darwin; `aspell/` |
 
-The Pythons come from `astral-sh/python-build-standalone` (the
-`install_only` archives), then `python3.12 -m pip install prompt_toolkit
-pygments pyinstaller pytest`. 3.12 matches CI: the version the binary
-embeds is the version students run, so it should not differ between
-architectures. pandoc and typst come from `jgm/pandoc` and
-`typst/typst` releases. A toolchain without `bin/` falls back to the
-pandoc and typst on `PATH`.
+**Python** is python-build-standalone (`astral-sh/python-build-standalone`,
+the `install_only` archives), then `python3.12 -m pip install
+prompt_toolkit pygments pyinstaller pytest`. Not Homebrew or python.org:
+those are framework builds, and a folder frozen from one carries
+`Python.framework`, its symlinks and ~60 binaries that each need signing.
+freeze.sh refuses it. 3.12 matches CI, because the version the binary
+embeds is the version students run.
+
+**pandoc and typst** are the projects' own release binaries (`jgm/pandoc`,
+`typst/typst`), never Homebrew's. A binary records the oldest macOS it
+will start on, and Homebrew builds for the Mac it is installed on: 0.1.0
+and 0.1.1 shipped Homebrew's pandoc on Apple Silicon, which needed macOS
+26, so on Sequoia every export failed while the rest of the app worked.
+freeze.sh now refuses any bundled binary that needs a newer macOS than
+`FOLIO_MACOS_FLOOR` (default 15.0). A toolchain without `bin/` falls back
+to the pandoc and typst on `PATH`, and that check is what catches it.
+
+**aspell** is built from source by `scripts/build-aspell.sh`, which pins
+aspell 0.60.8.1 and the 2020.12.07 English dictionaries by checksum and
+caches the sources in `builds/src/`:
+
+```
+desktop/scripts/build-aspell.sh builds/arm64-toolchain/aspell
+desktop/scripts/build-aspell.sh builds/intel-toolchain/aspell x86_64
+```
+
+It links only system libraries, and Folio passes it `--data-dir` and
+`--dict-dir` (`_aspell_argv` in folio.py) because the paths compiled into
+it are on this machine. freeze.sh refuses an aspell that does not flag
+"recieve", which is how a copy missing its dictionaries would otherwise
+ship: it runs, and passes every word. Windows gets aspell from MSYS2 in CI.
 
 ## Building for Intel Macs
 

@@ -1899,6 +1899,35 @@ def test_color_schemes():
     print("  Scheme key parity across dark/light/green/amber OK")
 
 
+def test_aspell_argv():
+    # The deck runs whatever aspell the system has, with exactly the
+    # arguments it always had. Only a build that ships aspell/ beside the
+    # script redirects to the bundled copy and its dictionaries.
+    import folio as J
+    orig = J._APP_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            J._APP_DIR = Path(tmpdir)
+            assert J._aspell_argv("list", "--lang=en_US") == [
+                "aspell", "list", "--lang=en_US"]
+
+            name = "aspell.exe" if sys.platform == "win32" else "aspell"
+            exe = Path(tmpdir) / "aspell" / "bin" / name
+            exe.parent.mkdir(parents=True)
+            exe.write_text("")
+            argv = J._aspell_argv("list", "--lang=en_US")
+            data = Path(tmpdir) / "aspell" / "lib" / "aspell-0.60"
+            assert argv[0] == str(exe)
+            assert f"--data-dir={data}" in argv
+            assert f"--dict-dir={data}" in argv
+            assert f"--home-dir={Path.home()}" in argv
+            # Options before the command, the command and its arguments
+            # last and in order.
+            assert argv[-2:] == ["list", "--lang=en_US"]
+    finally:
+        J._APP_DIR = orig
+
+
 if __name__ == "__main__":
     print("Testing data models...")
     test_entry_dataclass()
@@ -2064,6 +2093,10 @@ if __name__ == "__main__":
     print("Testing color schemes...")
     test_color_schemes()
     print("  \u2713 Color scheme tests passed\n")
+
+    print("Testing aspell command line...")
+    test_aspell_argv()
+    print("  \u2713 aspell tests passed\n")
 
     print("=" * 50)
     print("All tests passed!")
