@@ -163,7 +163,11 @@ jobs:
           # The DLLs that aspell and its filter modules link from MSYS2's
           # tree; the rest belong to Windows. They sit beside aspell.exe,
           # the one directory Windows always searches.
-          ldd /mingw64/bin/aspell.exe "$out"/lib/aspell-0.60/*.dll 2>/dev/null \
+          # nullglob: MSYS2's aspell compiles its filters in, so there are
+          # usually no filter DLLs, and a literal '*.dll' handed to ldd
+          # fails the step (this shell runs with pipefail).
+          shopt -s nullglob
+          ldd /mingw64/bin/aspell.exe "$out"/lib/aspell-0.60/*.dll \
             | awk '$3 ~ "^/mingw64/" {print $3}' | sort -u \
             | xargs -r cp -t "$out/bin/"
           ls -la "$out/bin"
