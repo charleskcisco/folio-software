@@ -41,6 +41,23 @@ case "$(uname -s)" in
   *)                    EXE="";     SEP=":" ;;
 esac
 
+# Under Rosetta (`arch -x86_64 ./freeze.sh`, the Intel build), Apple's
+# developer tools have to run natively. lipo, otool and friends in
+# /usr/bin are shims that load the Command Line Tools' libxcrun, which
+# no longer ships an x86_64 slice -- run as Intel they die with "unable to
+# load libxcrun ... missing compatible architecture", and PyInstaller
+# calls lipo on every binary it collects. These wrappers re-exec them as
+# arm64; their output is architecture-neutral, so nothing else changes.
+if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]; then
+  NATIVE_TOOLS="$(mktemp -d)"
+  trap 'rm -rf "$NATIVE_TOOLS"' EXIT
+  for tool in lipo otool install_name_tool strip nm codesign codesign_allocate vtool; do
+    printf '#!/bin/sh\nexec arch -arm64 /usr/bin/%s "$@"\n' "$tool" > "${NATIVE_TOOLS}/${tool}"
+    chmod +x "${NATIVE_TOOLS}/${tool}"
+  done
+  export PATH="${NATIVE_TOOLS}:$PATH"
+fi
+
 # FOLIO_PYTHON picks the interpreter, which matters for universal builds:
 # PyInstaller freezes for the architecture of the interpreter running it,
 # so a universal2 binary needs a universal2 Python and nothing else will
