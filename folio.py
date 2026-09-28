@@ -3287,15 +3287,29 @@ def _friendly_time(when: datetime) -> str:
 
 
 class VersionHistoryDialog:
-    """Earlier versions of the open note, newest first.
+    """Earlier versions of the open note, newest first, under "Now".
 
-    Resolves with ("restore" | "copy", when, text), or None. Enter
-    restores into the editor; c restores as a separate copy, leaving the
-    note as it is -- for taking back one lost paragraph without giving
-    up everything written since. Each row shows its word count against the text as it
-    stands now, and the preview opens at the first line where the version
-    differs -- which is the part anyone looking for lost writing needs.
+    Resolves with ("restore" | "copy", when, text), or None to keep the
+    text in the editor. Enter on a version restores it into the editor; c
+    restores it as a separate copy, leaving the note as it is -- for
+    taking back one lost paragraph without giving up everything written
+    since. Enter on Now, or Escape, closes with nothing changed.
+
+    Each row gives its word count against the text as it stands now, and
+    the preview opens at the first line where the version differs --
+    the part anyone looking for lost writing needs.
+
+    Rows are laid out here at a fixed width rather than with the list's
+    right-hand column: that column is placed from the width of the
+    previous render, so the first frame came out compact and the rows
+    jumped sideways on the first keypress.
     """
+
+    _WIDTH = 78                 # the dialog
+    _LEFT, _RIGHT = 30, 38      # a row's two columns; fits inside it
+
+    def _row(self, left, right):
+        return f"{left:<{self._LEFT}}{right:>{self._RIGHT}}"
 
     def __init__(self, versions, current: str):
         self.future = asyncio.Future()
@@ -3303,7 +3317,8 @@ class VersionHistoryDialog:
         self._texts = {}
         self._whens = {}
         now_words = len(current.split())
-        items = []
+        items = [("__now__", self._row("Now, in the editor",
+                                       f"{now_words:,} words"))]
         for when, f in versions:
             try:
                 text = f.read_text(encoding="utf-8")
@@ -3318,14 +3333,8 @@ class VersionHistoryDialog:
             else:
                 delta = words - now_words
                 note = f"{words:,} words ({'+' if delta >= 0 else '−'}{abs(delta):,})"
-            items.append((key, f"  {_friendly_time(when)}", f"{note} "))
-        self.has_versions = bool(items)
-        if not items:
-            items = [("__empty__", "No earlier versions yet.", "")]
-        # A fixed point to read the list against: what is open now is not
-        # itself a version, and without it a single row reads as a
-        # heading rather than as the one version there is.
-        items = [(None, f"Now: {now_words:,} words, as open in the editor")] + items
+            items.append((key, self._row(_friendly_time(when), note)))
+        self.has_versions = len(items) > 1
         self.list = SelectableList(on_select=self._select)
         self.list.set_items(items)
         self.list.on_navigate = lambda: get_app().invalidate()
@@ -3344,27 +3353,35 @@ class VersionHistoryDialog:
 
         hints = [("class:accent bold", " ↑↓"), ("class:hint", " choose   "),
                  ("class:accent bold", "enter"), ("class:hint", " restore   "),
-                 ("class:accent bold", "c"), ("class:hint", " restore as a copy   "),
-                 ("class:accent bold", "esc"), ("class:hint", " close")]
+                 ("class:accent bold", "c"), ("class:hint", " as a copy   "),
+                 ("class:accent bold", "esc"), ("class:hint", " close, keep current")]
+        # No buttons: Escape and Enter on Now both close, and a Close
+        # button was only somewhere for Tab to strand the focus.
         self.dialog = Dialog(
             title="Version history",
             body=HSplit([
                 self.list,
                 Window(height=1, char="─", style="class:hint"),
                 Window(FormattedTextControl(self._preview),
-                       height=D(min=4, preferred=10), wrap_lines=True),
+                       height=D.exact(10), wrap_lines=True),
                 Window(height=1),
                 Window(FormattedTextControl(hints), height=1),
             ]),
-            buttons=[Button(text="Close", handler=self.cancel)],
             modal=True,
-            width=D(preferred=80, max=96),
+            width=D(min=50, preferred=self._WIDTH, max=self._WIDTH),
         )
 
     def _preview(self):
-        if not self.has_versions:
-            return [("", "")]
         key = self.list.items[self.list.selected_index][0]
+        if key == "__now__":
+            if not self.has_versions:
+                return [("class:hint",
+                         " No earlier versions yet. One is kept when you open"
+                         " a note,\n when you leave it, and every few minutes"
+                         " while you write.")]
+            return [("class:hint",
+                     " The text you have open. Choose an earlier version to"
+                     "\n see where it differs.")]
         text = self._texts.get(key, "")
         if text == self._current:
             return [("class:hint", " Identical to the text you have open.")]
@@ -3377,7 +3394,10 @@ class VersionHistoryDialog:
         return [("class:hint", head + "\n"), ("", "\n".join(shown))]
 
     def _select(self, key):
-        self._choose("restore", key)
+        if key == "__now__":
+            self.cancel()
+        else:
+            self._choose("restore", key)
 
     def _choose(self, action, key):
         if key in self._texts and not self.future.done():
