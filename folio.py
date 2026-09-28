@@ -2698,6 +2698,10 @@ def take_screenshot() -> Optional[Path]:
 async def show_dialog_as_float(state, dialog):
     """Show a modal dialog as a float and await its result."""
     float_ = Float(content=dialog, transparent=False)
+    # Float converts its content to the dialog's drawn container, so the
+    # dialog object itself -- its cancel() and future -- is kept here for
+    # the global Escape handler to find.
+    float_.dialog = dialog
     state.root_container.floats.append(float_)
     app = get_app()
     focused_before = app.layout.current_window
@@ -3317,12 +3321,17 @@ class VersionHistoryDialog:
             items.append((key, f"  {_friendly_time(when)}", f"{note} "))
         self.has_versions = bool(items)
         if not items:
-            items = [("__empty__",
-                      "  No earlier versions yet. They are kept as you write.",
-                      "")]
+            items = [("__empty__", "No earlier versions yet.", "")]
+        # A fixed point to read the list against: what is open now is not
+        # itself a version, and without it a single row reads as a
+        # heading rather than as the one version there is.
+        items = [(None, f"Now: {now_words:,} words, as open in the editor")] + items
         self.list = SelectableList(on_select=self._select)
         self.list.set_items(items)
         self.list.on_navigate = lambda: get_app().invalidate()
+        # As tall as its rows (to a limit), so the list reads as a list
+        # instead of one row floating above a gap.
+        self.list.window.height = D.exact(min(len(items), 12))
 
         @self.list._kb.add("escape", eager=True)
         def _esc(event):
@@ -3333,13 +3342,19 @@ class VersionHistoryDialog:
             self._choose("copy",
                          self.list.items[self.list.selected_index][0])
 
+        hints = [("class:accent bold", " ↑↓"), ("class:hint", " choose   "),
+                 ("class:accent bold", "enter"), ("class:hint", " restore   "),
+                 ("class:accent bold", "c"), ("class:hint", " restore as a copy   "),
+                 ("class:accent bold", "esc"), ("class:hint", " close")]
         self.dialog = Dialog(
-            title="Version history — enter: restore · c: restore as a copy",
+            title="Version history",
             body=HSplit([
                 self.list,
                 Window(height=1, char="─", style="class:hint"),
                 Window(FormattedTextControl(self._preview),
-                       height=8, wrap_lines=True),
+                       height=D(min=4, preferred=10), wrap_lines=True),
+                Window(height=1),
+                Window(FormattedTextControl(hints), height=1),
             ]),
             buttons=[Button(text="Close", handler=self.cancel)],
             modal=True,
@@ -6370,7 +6385,12 @@ def create_app(storage):
     @kb.add("escape", eager=True)
     def _(event):
         if state.root_container.floats:
-            dialog = state.root_container.floats[-1].content
+            # This is what closes a dialog when its list does not have the
+            # focus -- after Tab onto a button, or a click on one. It used
+            # to read the float's content, which is the drawn container
+            # rather than the dialog, so it found nothing to cancel and
+            # Escape did nothing at all.
+            dialog = getattr(state.root_container.floats[-1], "dialog", None)
             if hasattr(dialog, 'cancel'):
                 dialog.cancel()
             elif hasattr(dialog, 'future') and not dialog.future.done():
