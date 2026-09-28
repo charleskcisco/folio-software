@@ -3025,6 +3025,54 @@ class ExportFormatDialog:
         return self.dialog
 
 
+def _file_manager_name() -> str:
+    """What the host's file manager is called, for labels."""
+    if sys.platform == "darwin":
+        return "Finder"
+    if sys.platform == "win32":
+        return "File Explorer"
+    return "file manager"
+
+
+class AfterExportDialog:
+    """Offer to open a finished export or show it in the file manager.
+
+    Desktop only: on the deck there is no default application to hand a
+    PDF to, and the exports screen's print action is the way out.
+    """
+
+    def __init__(self, path):
+        self.future = asyncio.Future()
+        self.list = SelectableList(on_select=self._select)
+        self.list.set_items([
+            ("open", "Open it"),
+            ("reveal", f"Show in {_file_manager_name()}"),
+            ("none", "Not now"),
+        ])
+
+        @self.list._kb.add("escape", eager=True)
+        def _escape(event):
+            self.cancel()
+
+        self.dialog = Dialog(
+            title=f"Exported {Path(path).name}",
+            body=HSplit([self.list], padding=0),
+            modal=True,
+            width=D(preferred=46, max=60),
+        )
+
+    def _select(self, choice):
+        if not self.future.done():
+            self.future.set_result(choice)
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
 MARKDOWN_CHEAT_SHEET = """\
 Markdown Cheat Sheet
 
@@ -5240,6 +5288,16 @@ def create_app(storage):
             except ValueError:
                 return str(p)
 
+        def _exported(path):
+            show_notification(state, f"Exported: {_fmt_dest(path)}")
+            # On a laptop the export is usually wanted straight away --
+            # to read over, or to upload -- so offer to open it or show
+            # where it went. Scheduled rather than awaited: the export's
+            # own cleanup runs first, and the dialog then waits on the
+            # student without holding the export open.
+            if _is_desktop():
+                asyncio.ensure_future(_offer_to_open(path))
+
         def _describe_returncode(code):
             """Say what a negative exit code means.
 
@@ -5460,7 +5518,7 @@ def create_app(storage):
                     suffix = f" (see {log})" if log else ""
                     show_notification(state, f"Export failed (typst): {tail}{suffix}")
                     return
-                show_notification(state, f"Exported: {_fmt_dest(pdf_path)}")
+                _exported(pdf_path)
                 return
 
             lua_code = _generate_lua_filter(yaml)
@@ -5539,7 +5597,7 @@ def create_app(storage):
                 pass
 
             if export_format == "docx":
-                show_notification(state, f"Exported: {_fmt_dest(docx_path)}")
+                _exported(docx_path)
                 return
 
             show_notification(state, "Exporting\u2026 (3/3) Converting to PDF", duration=_PROGRESS_SHOWN)
@@ -5568,7 +5626,7 @@ def create_app(storage):
                 suffix = f" (see {log})" if log else ""
                 show_notification(state, f"Export failed (LibreOffice): {tail}{suffix}")
                 return
-            show_notification(state, f"Exported: {_fmt_dest(pdf_path)}")
+            _exported(pdf_path)
 
         except subprocess.TimeoutExpired:
             show_notification(state, "Export failed: timed out")
@@ -5580,6 +5638,15 @@ def create_app(storage):
                 shutil.rmtree(tmp_dir, ignore_errors=True)
             except OSError:
                 pass
+
+    async def _offer_to_open(path):
+        choice = await show_dialog_as_float(state, AfterExportDialog(path))
+        if choice == "open":
+            if not _open_externally(path):
+                show_notification(state, f"Could not open {Path(path).name}.")
+        elif choice == "reveal":
+            if not _reveal_in_file_manager(path):
+                show_notification(state, f"Could not show {Path(path).name}.")
 
     # ── Editor actions ───────────────────────────────────────────────
 
