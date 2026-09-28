@@ -3285,8 +3285,10 @@ def _friendly_time(when: datetime) -> str:
 class VersionHistoryDialog:
     """Earlier versions of the open note, newest first.
 
-    Enter resolves with the chosen version's text; the caller loads it
-    into the editor. Each row shows its word count against the text as it
+    Resolves with ("restore" | "copy", when, text), or None. Enter
+    restores into the editor; c restores as a separate copy, leaving the
+    note as it is -- for taking back one lost paragraph without giving
+    up everything written since. Each row shows its word count against the text as it
     stands now, and the preview opens at the first line where the version
     differs -- which is the part anyone looking for lost writing needs.
     """
@@ -3295,6 +3297,7 @@ class VersionHistoryDialog:
         self.future = asyncio.Future()
         self._current = current
         self._texts = {}
+        self._whens = {}
         now_words = len(current.split())
         items = []
         for when, f in versions:
@@ -3304,6 +3307,7 @@ class VersionHistoryDialog:
                 continue
             key = str(f)
             self._texts[key] = text
+            self._whens[key] = when
             words = len(text.split())
             if text == current:
                 note = "same as now"
@@ -3324,8 +3328,13 @@ class VersionHistoryDialog:
         def _esc(event):
             self.cancel()
 
+        @self.list._kb.add("c")
+        def _copy(event):
+            self._choose("copy",
+                         self.list.items[self.list.selected_index][0])
+
         self.dialog = Dialog(
-            title="Version history — enter: restore",
+            title="Version history — enter: restore · c: restore as a copy",
             body=HSplit([
                 self.list,
                 Window(height=1, char="─", style="class:hint"),
@@ -3334,7 +3343,7 @@ class VersionHistoryDialog:
             ]),
             buttons=[Button(text="Close", handler=self.cancel)],
             modal=True,
-            width=D(preferred=76, max=96),
+            width=D(preferred=80, max=96),
         )
 
     def _preview(self):
@@ -3353,8 +3362,11 @@ class VersionHistoryDialog:
         return [("class:hint", head + "\n"), ("", "\n".join(shown))]
 
     def _select(self, key):
+        self._choose("restore", key)
+
+    def _choose(self, action, key):
         if key in self._texts and not self.future.done():
-            self.future.set_result(self._texts[key])
+            self.future.set_result((action, self._whens[key], self._texts[key]))
 
     def cancel(self):
         if not self.future.done():
@@ -6212,9 +6224,31 @@ def create_app(storage):
                 versions = state.storage.history.versions(entry.path, current)
             except (OSError, ValueError):
                 versions = []
-        text = await show_dialog_as_float(
+        chosen = await show_dialog_as_float(
             state, VersionHistoryDialog(versions, current))
-        if text is None or text == current:
+        if chosen is None:
+            return
+        action, when, text = chosen
+        if action == "copy":
+            # Beside the original, named for the version's time. The
+            # open note is left exactly as it is.
+            local = when.astimezone()
+            stamp = (f"{local.day} {local.strftime('%b')} "
+                     f"{local.hour % 12 or 12}.{local.minute:02d} "
+                     f"{'AM' if local.hour < 12 else 'PM'}")
+            base = f"{entry.name} (version from {stamp})"
+            name, n = base, 2
+            while (state.storage.vault_dir / f"{safe_entry_name(name)}.md").exists():
+                name, n = f"{base} {n}", n + 1
+            try:
+                copy = state.storage.create_entry(name)
+                state.storage.save_entry(copy, text)
+            except OSError as exc:
+                show_notification(state, f"Could not save the copy: {exc}")
+                return
+            show_notification(state, f"Restored as '{copy.name}'.", duration=5.0)
+            return
+        if text == current:
             return
         # What is being replaced becomes the newest version, so a restore
         # can be walked back from the history as well as with undo.

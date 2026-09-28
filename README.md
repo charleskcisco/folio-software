@@ -98,7 +98,7 @@ Ctrl+r will open a pop-up from which you can fuzzy search your .bib file in `~/D
 <img width="1280" height="400" alt="screenshot_20260228_143827" src="https://github.com/user-attachments/assets/97c25cf4-6549-46ba-9595-c2b6eb59428b" />
 
 ### Version history (palette only)
-Folio keeps earlier versions of every note it opens: one when you open it, one when you leave it, and one every five minutes or so while you write. The ten most recent are kept, plus the last version from each of the past fourteen days, so yesterday's draft is always there. Choose a version to see where it differs from what you have now; press enter to bring it back into the editor, where ^z undoes the restore and nothing is saved until you save.
+Folio keeps earlier versions of every note it opens: one when you open it, one when you leave it, and one every five minutes or so while you write. The ten most recent are kept, plus the last version from each of the past fourteen days, so yesterday's draft is always there. Choose a version to see where it differs from what you have now; press enter to bring it back into the editor, where ^z undoes the restore and nothing is saved until you save, or c to restore it as a copy instead: a new note beside the original, named for the version's time ("essay (version from 28 Sep 9.54 AM)"), with the note you are writing left exactly as it is.
 
 The history lives outside the vault (`~/.config/folio/history`, or `%APPDATA%\folio\history` on Windows), the same way Obsidian keeps its own file recovery, so it never collides with Obsidian or gets carried around by Syncthing. Each device keeps its own. Renaming a note in Folio takes its history along; rename it elsewhere and Folio finds the history again by its text the next time you open it.
 
