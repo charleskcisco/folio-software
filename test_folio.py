@@ -359,12 +359,44 @@ def test_typst_wrapper():
     # Absent frontmatter still produces every parameter, so the template
     # never sees a missing argument.
     bare = _typst_wrapper({}, "body.typ")
-    for key in ("title", "author", "course", "instructor", "date",
-                "style", "spacing", "lastname"):
+    for key in ("title", "subtitle", "author", "course", "instructor",
+                "date", "style", "spacing", "lastname"):
         assert f"{key}: " in bare, key
     # spacing falls back to the default rather than an empty string.
     assert 'spacing: "double",' in bare
     print("  Typst wrapper OK")
+
+
+def test_templates_accept_every_wrapper_argument():
+    # The wrapper passes every field to whichever template the style picks,
+    # and Typst rejects an argument a template does not declare -- so a
+    # field added to the wrapper but missed in one template fails that
+    # style's every export, and only at export time.
+    import re
+    keys = re.findall(r"^  (\w+): ", _typst_wrapper({}, "body.typ"), re.M)
+    assert "subtitle" in keys
+    for tpl in sorted(_TEMPLATES_DIR.glob("*.typ")):
+        src = tpl.read_text(encoding="utf-8")
+        conf = src[src.index("#let conf("):]
+        params = conf[:conf.index(") = {")]
+        for key in keys:
+            assert re.search(rf"^\s+{key}:", params, re.M), (tpl.name, key)
+    print("  Templates accept every wrapper argument OK")
+
+
+def test_subtitle_in_docx_filters():
+    y = {"title": "Men Without Chests",
+         "subtitle": "Lewis on the Emotions"}
+    for style in ("chicago", "mla"):
+        lua = _generate_lua_filter(dict(y, style=style))
+        assert 'local meta_subtitle = "Lewis on the Emotions"' in lua, style
+        # Removed from the metadata, or pandoc prints it a second time in
+        # the reference document's Subtitle style.
+        assert "meta.subtitle = nil" in lua, style
+    # No subtitle: nothing to place, and the title is emitted as before.
+    lua = _generate_lua_filter({"title": "T", "style": "chicago"})
+    assert 'local meta_subtitle = ""' in lua
+    print("  Subtitle in docx filters OK")
 
 
 def test_typst_template_exists():
@@ -1970,6 +2002,8 @@ if __name__ == "__main__":
     test_format_export_date()
     test_typst_str()
     test_typst_wrapper()
+    test_templates_accept_every_wrapper_argument()
+    test_subtitle_in_docx_filters()
     test_typst_template_exists()
     test_pdf_engine_routing()
     test_resolve_bib_path()

@@ -57,6 +57,7 @@
 
 #let conf(
   title: "",
+  subtitle: "",
   author: "",
   course: "",
   instructor: "",
@@ -89,7 +90,15 @@
     // the one place turabian.typ deliberately departs from journal.typ,
     // whose 1.667in comes from the reference .docx.
     v(2.667in)
-    align(center)[#title]
+    // Turabian's title page rule: a subtitle goes on the line below the
+    // title, and the title line ends with a colon. A title typed with
+    // its own colon keeps just the one.
+    if subtitle != "" {
+      let lead = if title.ends-with(":") { title } else { title + ":" }
+      align(center)[#lead#linebreak()#subtitle]
+    } else {
+      align(center)[#title]
+    }
     v(2.5in)
     align(center)[
       #let info = (author, course, instructor, date).filter(x => x != "")

@@ -80,6 +80,7 @@
 
 #let conf(
   title: "",
+  subtitle: "",
   author: "",
   course: "",
   instructor: "",
@@ -204,6 +205,10 @@
     set par(leading: leading-single, spacing: 0pt, first-line-indent: 0pt)
     if title != "" {
       align(center)[#text(size: 28pt)[#title]]
+      v(5.2pt, weak: false)
+    }
+    if subtitle != "" {
+      align(center)[#text(size: 18pt)[#subtitle]]
       v(5.2pt, weak: false)
     }
     if author != "" {

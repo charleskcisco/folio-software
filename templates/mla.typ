@@ -68,6 +68,7 @@
 
 #let conf(
   title: "",
+  subtitle: "",
   author: "",
   course: "",
   instructor: "",
@@ -180,8 +181,12 @@
       info.join(linebreak())
       linebreak()
     }
+    // MLA keeps title and subtitle on one line, joined by a colon.
     if title != "" {
-      align(center)[#title]
+      let full = if subtitle == "" { title }
+        else if title.ends-with(":") { title + " " + subtitle }
+        else { title + ": " + subtitle }
+      align(center)[#full]
     }
   }
 

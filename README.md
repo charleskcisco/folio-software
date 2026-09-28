@@ -105,6 +105,7 @@ This will insert at the top of the document the frontmatter relevant to the expo
 ```yaml
 ---
 title: Essay
+subtitle: An Optional Second Line
 author: Johnny Smith
 instructor: Dr. Cisco
 date: 2 June 2026
@@ -116,6 +117,7 @@ csl: /home/username/documents/sources/chicago.csl
 ---
 ```
 
+- **subtitle**: optional. Chicago puts it on the title page, on the line below a title that ends with a colon; MLA joins it to the title with a colon; with no style it sits beneath the title
 - **spacing**: `single`, `double`
 - **style**: `chicago` (Turabian cover page) or `mla` (MLA header)
 - **bibliography**: path to `.bib` file (enables `--citeproc` during export)

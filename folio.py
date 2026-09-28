@@ -591,6 +591,7 @@ end"""
 def _lua_coverpage_filter(yaml: dict) -> str:
     """Turabian-style cover page via OpenXML raw blocks."""
     title = yaml.get("title", "").replace('"', '\\"')
+    subtitle = yaml.get("subtitle", "").replace('"', '\\"')
     author = yaml.get("author", "").replace('"', '\\"')
     course = yaml.get("course", "").replace('"', '\\"')
     instructor = yaml.get("instructor", "").replace('"', '\\"')
@@ -598,6 +599,7 @@ def _lua_coverpage_filter(yaml: dict) -> str:
 
     return _lua_bib_entry_xml() + f"""-- Cover page format (Turabian style)
 local meta_title = "{title}"
+local meta_subtitle = "{subtitle}"
 local meta_author = "{author}"
 local meta_course = "{course}"
 local meta_instructor = "{instructor}"
@@ -622,6 +624,12 @@ function Meta(meta)
   if meta.title and meta_title == "" then
     meta_title = pandoc.utils.stringify(meta.title)
   end
+  if meta.subtitle and meta_subtitle == "" then
+    meta_subtitle = pandoc.utils.stringify(meta.subtitle)
+  end
+  -- Placed by hand below, like the title; left in the metadata, pandoc
+  -- would also print it in the reference document's Subtitle style.
+  meta.subtitle = nil
   if meta.author and meta_author == "" then
     meta_author = pandoc.utils.stringify(meta.author)
   end
@@ -646,6 +654,13 @@ function Pandoc(doc)
   local new_blocks = {{}}
 
   if meta_title and meta_title ~= "" then
+    -- Turabian: with a subtitle, the title line ends with a colon and the
+    -- subtitle takes the line below. A title typed with its own colon
+    -- keeps just the one.
+    local title_line = meta_title
+    if meta_subtitle ~= "" and not meta_title:match(":%s*$") then
+      title_line = meta_title .. ":"
+    end
     table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
 <w:p>
   <w:pPr>
@@ -655,7 +670,19 @@ function Pandoc(doc)
   <w:r>
     <w:t>%s</w:t>
   </w:r>
-</w:p>]], meta_title)))
+</w:p>]], title_line)))
+    if meta_subtitle ~= "" then
+      table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:before="0" w:after="0" w:line="480" w:lineRule="auto"/>
+    <w:jc w:val="center"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], meta_subtitle)))
+    end
   end
 
   local gap_before_author = 4320
@@ -785,6 +812,7 @@ end"""
 def _lua_header_filter(yaml: dict) -> str:
     """MLA-style header block via OpenXML raw blocks."""
     title = yaml.get("title", "").replace('"', '\\"')
+    subtitle = yaml.get("subtitle", "").replace('"', '\\"')
     author = yaml.get("author", "").replace('"', '\\"')
     course = yaml.get("course", "").replace('"', '\\"')
     instructor = yaml.get("instructor", "").replace('"', '\\"')
@@ -792,6 +820,7 @@ def _lua_header_filter(yaml: dict) -> str:
 
     return _lua_bib_entry_xml() + f"""-- MLA Header format
 local meta_title = "{title}"
+local meta_subtitle = "{subtitle}"
 local meta_author = "{author}"
 local meta_course = "{course}"
 local meta_instructor = "{instructor}"
@@ -816,6 +845,12 @@ function Meta(meta)
   if meta.title and meta_title == "" then
     meta_title = pandoc.utils.stringify(meta.title)
   end
+  if meta.subtitle and meta_subtitle == "" then
+    meta_subtitle = pandoc.utils.stringify(meta.subtitle)
+  end
+  -- Placed by hand below, like the title; left in the metadata, pandoc
+  -- would also print it in the reference document's Subtitle style.
+  meta.subtitle = nil
   if meta.author and meta_author == "" then
     meta_author = pandoc.utils.stringify(meta.author)
   end
@@ -889,6 +924,15 @@ function Pandoc(doc)
   end
 
   if meta_title and meta_title ~= "" then
+    -- MLA keeps title and subtitle on one line, joined by a colon.
+    local full_title = meta_title
+    if meta_subtitle ~= "" then
+      if meta_title:match(":%s*$") then
+        full_title = meta_title:gsub("%s*$", "") .. " " .. meta_subtitle
+      else
+        full_title = meta_title .. ": " .. meta_subtitle
+      end
+    end
     table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
 <w:p>
   <w:pPr>
@@ -898,7 +942,7 @@ function Pandoc(doc)
   <w:r>
     <w:t>%s</w:t>
   </w:r>
-</w:p>]], meta_title)))
+</w:p>]], full_title)))
   end
 
   local in_bib = false
@@ -1199,6 +1243,7 @@ def _typst_wrapper(yaml: dict, body_name: str) -> str:
     """
     fields = [
         ("title", yaml.get("title", "")),
+        ("subtitle", yaml.get("subtitle", "")),
         ("author", yaml.get("author", "")),
         ("course", yaml.get("course", "")),
         ("instructor", yaml.get("instructor", "")),
@@ -3891,7 +3936,7 @@ class SpellCheckPanel:
 # ════════════════════════════════════════════════════════════════════════
 
 
-_FRONTMATTER_PROPS = ["title", "author", "instructor", "course", "date", "spacing", "style"]
+_FRONTMATTER_PROPS = ["title", "subtitle", "author", "instructor", "course", "date", "spacing", "style"]
 
 # ── Style ────────────────────────────────────────────────────────────────
 
