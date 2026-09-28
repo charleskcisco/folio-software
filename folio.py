@@ -3900,6 +3900,35 @@ class CitePickerDialog:
         return self.dialog
 
 
+def _palette_rank(query: str, name: str) -> Optional[int]:
+    """How well a typed query matches a command name; lower is better.
+
+    0  the name starts with it            "ve" -> Version history
+    1  a later word starts with it        "hi" -> Version history
+    2  it appears inside a word           "ve" -> Save
+    3  it spells the words' initials      "vh" -> Version history
+    None otherwise -- no loose similarity matching. It used to score every
+    substring alike and let near-misses in besides, so "ve" put Save
+    above Version history, alphabetically, and offered commands that
+    did not contain the letters at all.
+    """
+    q = query.strip().lower()
+    n = name.lower()
+    if not q:
+        return 0
+    if n.startswith(q):
+        return 0
+    words = re.findall(r"[a-z0-9]+", n)
+    if any(w.startswith(q) for w in words[1:]):
+        return 1
+    if q in n:
+        return 2
+    initials = "".join(w[0] for w in words)
+    if len(q) > 1 and initials.startswith(q.replace(" ", "")):
+        return 3
+    return None
+
+
 class CommandPaletteDialog:
     """Command palette with fuzzy search."""
 
@@ -3953,18 +3982,13 @@ class CommandPaletteDialog:
         if not query:
             self.filtered = list(self.all_commands)
         else:
-            q = query.lower()
-            scored = []
-            for cmd in self.all_commands:
-                name = cmd[0].lower()
-                if q in name:
-                    scored.append((100.0, cmd))
-                else:
-                    ratio = SequenceMatcher(None, q, name).ratio() * 100
-                    if ratio > 30:
-                        scored.append((ratio, cmd))
-            scored.sort(key=lambda x: x[0], reverse=True)
-            self.filtered = [c for _, c in scored]
+            ranked = []
+            for i, cmd in enumerate(self.all_commands):
+                rank = _palette_rank(query, cmd[0])
+                if rank is not None:
+                    ranked.append((rank, i, cmd))
+            ranked.sort(key=lambda x: (x[0], x[1]))
+            self.filtered = [c for _, _, c in ranked]
         self.results.set_items([
             (str(i), cmd[0]) for i, cmd in enumerate(self.filtered)
         ])

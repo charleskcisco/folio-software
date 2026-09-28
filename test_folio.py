@@ -2091,6 +2091,24 @@ def test_atomic_write_text():
     print("  Atomic write OK")
 
 
+def test_palette_rank():
+    cmds = ["Export", "Find", "Insert blank footnote", "Insert citation",
+            "Save", "Spell check", "Version history"]
+    def order(q):
+        hits = [(folio._palette_rank(q, c), i, c) for i, c in enumerate(cmds)]
+        return [c for r, _, c in sorted(h for h in hits if h[0] is not None)]
+    # A prefix beats a match inside a word, whatever the alphabet says.
+    assert order("ve") == ["Version history", "Save"]
+    # A later word's start, and initials, find the command too.
+    assert order("hi") == ["Version history"]
+    assert order("vh") == ["Version history"]
+    assert order("ib") == ["Insert blank footnote"]
+    # No near-misses: letters that are not there match nothing.
+    assert order("xyz") == []
+    assert order("sq") == []
+    print("  Palette ranking OK")
+
+
 if __name__ == "__main__":
     print("Testing data models...")
     test_entry_dataclass()
@@ -2267,6 +2285,10 @@ if __name__ == "__main__":
     test_vault_storage_without_history_writes_none()
     test_atomic_write_text()
     print("  \u2713 Note history tests passed\n")
+
+    print("Testing palette ranking...")
+    test_palette_rank()
+    print("  \u2713 Palette tests passed\n")
 
     print("Testing aspell command line...")
     test_aspell_argv()
