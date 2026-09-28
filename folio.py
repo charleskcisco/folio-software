@@ -4909,6 +4909,9 @@ def create_app(storage):
     # screenshot tool. Neither belongs in a window on someone's laptop.
     _KB_EXTRAS = _keys([
         ("^up", "Go to top"), ("^dn", "Go to bottom"),
+    ] + ([
+        ("⌘←→", "Line start/end"), ("⇧⌘", "+arrow: select"),
+    ] if _mod() == "⌘" else []) + [
         ("^w", "Word/¶/off"),
         ("↵", "Continue list"),
         ("^g", "Keybindings"),
@@ -6887,6 +6890,70 @@ def create_app(storage):
             first_end = next_starts[1] - 1 if len(next_starts) > 1 else len(next_line)
             new_col = min(visual_col, first_end)
             buf.cursor_position = doc.translate_row_col_to_index(row + 1, new_col)
+
+    def _visual_line_bounds():
+        """Start and end index of the visual (wrapped) line under the cursor.
+
+        Line start/end means the line as drawn, as it does in any Mac or
+        Windows editor -- in prose a logical line is a whole paragraph, and
+        Home jumping to the top of one is not what anyone means.
+        """
+        doc = editor_area.buffer.document
+        row, col = doc.cursor_position_row, doc.cursor_position_col
+        line = doc.lines[row]
+        starts, _ = _word_wrap_boundaries(line, _editor_width())
+        vline = 0
+        for idx, s in enumerate(starts):
+            if col >= s:
+                vline = idx
+        end = starts[vline + 1] - 1 if vline + 1 < len(starts) else len(line)
+        base = doc.translate_row_col_to_index(row, 0)
+        return base + starts[vline], base + end
+
+    # Home/End and their Shift and Ctrl forms. The Mac wrapper sends these
+    # for Cmd+arrows (with Shift to select), which is the idiom students
+    # bring from every other Mac app; Windows keyboards and the deck send
+    # them directly. Ctrl+Up/Down above stay as they were.
+    def _move_to(pos, select):
+        buf = editor_area.buffer
+        if select:
+            if not buf.selection_state:
+                buf.start_selection()
+        elif buf.selection_state:
+            buf.exit_selection()
+        buf.cursor_position = pos
+
+    @kb.add("home", filter=editor_focused)
+    def _(event):
+        _move_to(_visual_line_bounds()[0], select=False)
+
+    @kb.add("end", filter=editor_focused)
+    def _(event):
+        _move_to(_visual_line_bounds()[1], select=False)
+
+    @kb.add("s-home", filter=editor_focused)
+    def _(event):
+        _move_to(_visual_line_bounds()[0], select=True)
+
+    @kb.add("s-end", filter=editor_focused)
+    def _(event):
+        _move_to(_visual_line_bounds()[1], select=True)
+
+    @kb.add("c-home", filter=editor_focused)
+    def _(event):
+        _move_to(0, select=False)
+
+    @kb.add("c-end", filter=editor_focused)
+    def _(event):
+        _move_to(len(editor_area.text), select=False)
+
+    @kb.add("c-s-home", filter=editor_focused)
+    def _(event):
+        _move_to(0, select=True)
+
+    @kb.add("c-s-end", filter=editor_focused)
+    def _(event):
+        _move_to(len(editor_area.text), select=True)
 
     @kb.add("up", filter=editor_focused)
     def _(event):

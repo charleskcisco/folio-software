@@ -185,10 +185,21 @@ term.attachCustomKeyEventHandler((e) => {
     return false;
   }
 
-  // Cmd+Up / Cmd+Down are the Mac idiom for document start and end, which
-  // Folio binds to Ctrl+Up / Ctrl+Down.
-  if (key === "arrowup" || key === "arrowdown") {
-    write(encoder.encode(key === "arrowup" ? "\x1b[1;5A" : "\x1b[1;5B"));
+  // Cmd+arrows are the Mac's line and document navigation, and adding
+  // Shift selects as far as they move -- the idiom students bring from
+  // every other Mac app. They go to Folio as the Home/End keys a Windows
+  // keyboard would send, so both platforms share one set of bindings:
+  //   Cmd+Left/Right  -> Home/End            (line start/end)
+  //   Cmd+Up/Down     -> Ctrl+Home/Ctrl+End  (document start/end)
+  // xterm's modifier parameter: 2 Shift, 5 Ctrl, 6 Ctrl+Shift.
+  const NAV: Record<string, [string, boolean]> = {
+    arrowleft: ["H", false], arrowright: ["F", false],
+    arrowup: ["H", true], arrowdown: ["F", true],
+  };
+  if (key in NAV) {
+    const [final, whole] = NAV[key];
+    const mod = whole ? (e.shiftKey ? 6 : 5) : (e.shiftKey ? 2 : 1);
+    write(encoder.encode(mod === 1 ? `\x1b[${final}` : `\x1b[1;${mod}${final}`));
     e.preventDefault();
     return false;
   }
