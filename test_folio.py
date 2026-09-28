@@ -1960,6 +1960,137 @@ def test_aspell_argv():
         J._APP_DIR = orig
 
 
+def _stamp(dt):
+    return dt.astimezone(folio.timezone.utc).strftime(folio.NoteHistory._STAMP)
+
+
+def test_note_history_record_and_interval():
+    with tempfile.TemporaryDirectory() as td:
+        h = folio.NoteHistory(Path(td) / "hist")
+        note = Path(td) / "vault" / "a.md"
+        note.parent.mkdir()
+        note.write_text("one")
+        # A fresh, empty note has nothing worth keeping.
+        assert not h.record(note, "")
+        assert h.record(note, "one")
+        # Unchanged text is never recorded twice.
+        assert not h.record(note, "one")
+        # While saving, snapshots are spaced out...
+        assert not h.record(note, "one two", min_interval=300)
+        # ...but opening and leaving record regardless.
+        assert h.record(note, "one two")
+        vs = h.versions(note)
+        assert [f.read_text() for _, f in vs] == ["one two", "one"]
+        # Once the latest is old enough, a save records again. Both are
+        # backdated, keeping their order, or the older would become the
+        # latest and still be seconds old.
+        now = folio.datetime.now(folio.timezone.utc)
+        for (_, f), mins in zip(vs, (10, 20)):
+            f.rename(f.with_name(_stamp(now - folio.timedelta(minutes=mins)) + ".md"))
+        assert h.record(note, "one two three", min_interval=300)
+    print("  NoteHistory record/interval OK")
+
+
+def test_note_history_retention():
+    # Ten newest always; beyond those, the newest of each of the last 14
+    # days; everything else goes.
+    with tempfile.TemporaryDirectory() as td:
+        h = folio.NoteHistory(Path(td) / "hist")
+        note = Path(td) / "a.md"
+        note.write_text("x")
+        assert h.record(note, "seed")
+        note_id = next(iter(h._load()))
+        d = Path(td) / "hist" / note_id
+        now = folio.datetime.now(folio.timezone.utc)
+        # Three snapshots a day for 20 days, noon-ish local, oldest first.
+        for day in range(20, 0, -1):
+            for hour in (9, 12, 15):
+                t = (now - folio.timedelta(days=day)).astimezone().replace(
+                    hour=hour, minute=0, second=0, microsecond=0)
+                (d / f"{_stamp(t)}.md").write_text(f"d{day}h{hour}")
+        assert h.record(note, "latest")
+        kept = sorted(f.read_text() for f in d.glob("*.md"))
+        # Ten newest: latest, seed, then the 1-2-3-day-old ones.
+        assert "latest" in kept and "seed" in kept
+        # Newest of each of the last 14 days survives...
+        for day in range(1, 14):
+            assert f"d{day}h15" in kept, day
+        # ...but not an older snapshot from a day already represented,
+        # unless it is among the ten newest.
+        assert "d10h9" not in kept
+        # And nothing from beyond the 14-day window.
+        assert not any(k.startswith(("d15h", "d16h", "d20h")) for k in kept)
+    print("  NoteHistory retention OK")
+
+
+def test_note_history_renames():
+    with tempfile.TemporaryDirectory() as td:
+        vault = Path(td) / "vault"
+        storage = VaultStorage(vault, history=folio.NoteHistory(Path(td) / "hist"))
+        entry = storage.create_entry("draft")
+        storage.save_entry(entry, "first draft")
+        # Renamed in Folio: the history moves with it.
+        moved = storage.rename_entry(entry, "essay")
+        assert [f.read_text() for _, f in storage.history.versions(moved.path)] \
+            == ["first draft"]
+        # Renamed elsewhere (Obsidian, Finder): found again by its text.
+        elsewhere = vault / "final.md"
+        moved.path.rename(elsewhere)
+        assert storage.history.versions(elsewhere) == []   # no text given
+        vs = storage.history.versions(elsewhere, "first draft")
+        assert [f.read_text() for _, f in vs] == ["first draft"]
+        # ...and stays found afterwards without the hint.
+        assert len(storage.history.versions(elsewhere)) == 1
+    print("  NoteHistory renames OK")
+
+
+def test_history_failure_never_blocks_save():
+    with tempfile.TemporaryDirectory() as td:
+        blocker = Path(td) / "hist"
+        blocker.write_text("a file where the history directory should be")
+        storage = VaultStorage(Path(td) / "vault",
+                               history=folio.NoteHistory(blocker))
+        entry = storage.create_entry("note")
+        storage.save_entry(entry, "still saved")
+        assert entry.path.read_text() == "still saved"
+    print("  History failure isolation OK")
+
+
+def test_vault_storage_without_history_writes_none():
+    # Tests and tools open vaults without a history; nothing may be
+    # written to the real config directory on their behalf.
+    with tempfile.TemporaryDirectory() as td:
+        storage = VaultStorage(Path(td) / "vault")
+        assert storage.history is None
+        entry = storage.create_entry("n")
+        storage.save_entry(entry, "text")
+        storage.snapshot(entry, "text")
+        assert entry.path.read_text() == "text"
+    print("  VaultStorage without history OK")
+
+
+def test_atomic_write_text():
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        p = d / "note.md"
+        p.write_text("old")
+        folio._atomic_write_text(p, "new ✓")
+        assert p.read_text(encoding="utf-8") == "new ✓"
+        # No temporary sibling left behind for Obsidian or Syncthing.
+        assert sorted(x.name for x in d.iterdir()) == ["note.md"]
+        # A symlinked note is written through, not replaced.
+        real = d / "real.md"
+        real.write_text("r")
+        link = d / "link.md"
+        try:
+            link.symlink_to(real)
+        except (OSError, NotImplementedError):
+            return    # no symlinks here (Windows without privilege)
+        folio._atomic_write_text(link, "through")
+        assert link.is_symlink() and real.read_text() == "through"
+    print("  Atomic write OK")
+
+
 if __name__ == "__main__":
     print("Testing data models...")
     test_entry_dataclass()
@@ -2127,6 +2258,15 @@ if __name__ == "__main__":
     print("Testing color schemes...")
     test_color_schemes()
     print("  \u2713 Color scheme tests passed\n")
+
+    print("Testing note history...")
+    test_note_history_record_and_interval()
+    test_note_history_retention()
+    test_note_history_renames()
+    test_history_failure_never_blocks_save()
+    test_vault_storage_without_history_writes_none()
+    test_atomic_write_text()
+    print("  \u2713 Note history tests passed\n")
 
     print("Testing aspell command line...")
     test_aspell_argv()

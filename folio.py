@@ -15,10 +15,12 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import uuid
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
@@ -170,9 +172,234 @@ def safe_entry_name(name: str) -> str:
     return "/".join(p for p in parts if p)
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Replace a file's contents so that a crash leaves the old or the new.
+
+    A plain write truncates the file first and fills it after, so power
+    lost in between -- a writerdeck unplugged mid-autosave -- leaves a
+    note that is empty or cut short. Writing a hidden sibling, flushing it
+    to the disk and renaming it over the note is all-or-nothing.
+
+    The sibling is a dotfile with no .md suffix, which Folio's listing,
+    Obsidian and the vault watcher all skip. A symlinked note is written
+    through to its target rather than replaced by a regular file. Where
+    the rename is refused -- Windows, while another program holds the
+    note open -- it falls back to the plain write it replaced.
+    """
+    target = Path(os.path.realpath(path))
+    tmp = target.with_name(f".{target.name}.folio-tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            shutil.copymode(target, tmp)
+        except OSError:
+            pass
+        try:
+            os.replace(tmp, target)
+        except PermissionError:
+            target.write_text(text, encoding="utf-8")
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+class NoteHistory:
+    """Snapshots of each note, kept outside the vault.
+
+    Outside, as Obsidian keeps its own file recovery, and for its reason:
+    whatever damages the vault -- a bad sync, a deleted folder -- cannot
+    take the history with it. It also keeps Folio out of Obsidian's way
+    and out of Syncthing's. Nothing here is synced, so two devices never
+    write conflicting history; each keeps its own.
+
+    Layout under root:
+      index.json          {id: {"path": "/abs/path/to/note.md"}}
+      <id>/<stamp>.md     one file per snapshot, stamped in UTC
+
+    Notes are tracked by id rather than path, so a rename in Folio moves
+    the history along (rename). A rename anywhere else -- Obsidian,
+    Finder, restoring from the trash -- is caught the next time the note
+    is recorded: a note with no history adopts an orphaned one whose
+    latest snapshot holds exactly its text.
+
+    Kept per note: the RECENT newest snapshots, plus the newest from each
+    of the last DAILY_DAYS days, so yesterday's draft survives a busy
+    afternoon. Snapshots are at least MIN_INTERVAL apart while saving;
+    opening a note and leaving the editor record regardless.
+
+    Best effort throughout. History exists to rescue writing, so a
+    failure here must never stop a save; callers swallow OSError.
+    """
+
+    RECENT = 10
+    DAILY_DAYS = 14
+    MIN_INTERVAL = 300
+    _STAMP = "%Y%m%dT%H%M%S.%fZ"
+
+    def __init__(self, root: Path):
+        self.root = root
+        self._lock = threading.Lock()
+
+    # ── index ──
+
+    def _index_path(self) -> Path:
+        return self.root / "index.json"
+
+    def _load(self) -> dict:
+        try:
+            data = json.loads(self._index_path().read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, index: dict) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(self._index_path(), json.dumps(index, indent=1))
+
+    @staticmethod
+    def _key(path) -> str:
+        return os.path.abspath(str(path))
+
+    # ── snapshots ──
+
+    def _files(self, note_id: str) -> list:
+        """Snapshot files for an id, newest first."""
+        d = self.root / note_id
+        try:
+            files = [f for f in d.glob("*.md") if not f.name.startswith(".")]
+        except OSError:
+            return []
+        return sorted(files, key=lambda f: f.name, reverse=True)
+
+    @classmethod
+    def _when(cls, f: Path) -> Optional[datetime]:
+        try:
+            return datetime.strptime(f.stem, cls._STAMP).replace(
+                tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    def _find(self, index: dict, key: str, content: Optional[str]):
+        """(id tracking this note, whether an orphan was just adopted).
+
+        An adoption changes the index in memory only; the caller saves.
+        """
+        for note_id, meta in index.items():
+            if meta.get("path") == key:
+                return note_id, False
+        if content is None:
+            return None, False
+        for note_id, meta in index.items():
+            if os.path.exists(meta.get("path", "")):
+                continue
+            files = self._files(note_id)
+            try:
+                if files and files[0].read_text(encoding="utf-8") == content:
+                    meta["path"] = key
+                    return note_id, True
+            except OSError:
+                continue
+        return None, False
+
+    def record(self, path, content: str, min_interval: float = 0) -> bool:
+        """Snapshot content for the note at path; True if one was written.
+
+        Skipped when it matches the latest snapshot, when the latest is
+        younger than min_interval, and for a note that has never held any
+        text (a fresh, empty note has nothing to recover).
+        """
+        with self._lock:
+            index = self._load()
+            key = self._key(path)
+            note_id, adopted = self._find(index, key, content)
+            files = self._files(note_id) if note_id else []
+            if files:
+                try:
+                    if files[0].read_text(encoding="utf-8") == content:
+                        if adopted:
+                            self._save(index)
+                        return False
+                except OSError:
+                    pass
+                last = self._when(files[0])
+                if (min_interval and last and
+                        (datetime.now(timezone.utc) - last).total_seconds()
+                        < min_interval):
+                    return False
+            elif not content.strip():
+                return False
+            if not note_id:
+                note_id = uuid.uuid4().hex[:12]
+            index.setdefault(note_id, {})["path"] = key
+            d = self.root / note_id
+            d.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime(self._STAMP)
+            _atomic_write_text(d / f"{stamp}.md", content)
+            self._prune(note_id)
+            self._save(index)
+            return True
+
+    def _prune(self, note_id: str) -> None:
+        files = self._files(note_id)
+        keep = set(files[:self.RECENT])
+        today = datetime.now().date()
+        seen_days = set()
+        for f in files:
+            when = self._when(f)
+            if when is None:
+                continue
+            day = when.astimezone().date()
+            if (today - day).days < self.DAILY_DAYS and day not in seen_days:
+                seen_days.add(day)
+                keep.add(f)
+        for f in files:
+            if f not in keep:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+    def rename(self, old, new) -> None:
+        """Move a note's history along with a rename made in Folio."""
+        with self._lock:
+            index = self._load()
+            note_id, _ = self._find(index, self._key(old), None)
+            if note_id:
+                index[note_id]["path"] = self._key(new)
+                self._save(index)
+
+    def versions(self, path, content: Optional[str] = None) -> list:
+        """(when, snapshot path) for a note, newest first.
+
+        content, when given, lets a note renamed outside Folio find its
+        history before anything has been recorded under the new name.
+        """
+        with self._lock:
+            index = self._load()
+            note_id, adopted = self._find(index, self._key(path), content)
+            if not note_id:
+                return []
+            if adopted:
+                self._save(index)
+            out = []
+            for f in self._files(note_id):
+                when = self._when(f)
+                if when:
+                    out.append((when, f))
+            return out
+
+
 class VaultStorage:
-    def __init__(self, vault_dir: Path):
+    def __init__(self, vault_dir: Path, history: Optional[NoteHistory] = None):
         self.vault_dir = vault_dir
+        # None outside the running app, so tests and tools that open a
+        # vault never write snapshots into the real config directory.
+        self.history = history
         self.pdf_dir = vault_dir / "pdf"
         self.docx_dir = vault_dir / "docx"
         self.vault_dir.mkdir(parents=True, exist_ok=True)
@@ -236,7 +463,17 @@ class VaultStorage:
         return entry.path.read_text(encoding="utf-8")
 
     def save_entry(self, entry: Entry, content: str) -> None:
-        entry.path.write_text(content, encoding="utf-8")
+        _atomic_write_text(entry.path, content)
+        self.snapshot(entry, content, NoteHistory.MIN_INTERVAL)
+
+    def snapshot(self, entry: Entry, content: str, min_interval: float = 0) -> None:
+        """Record a history snapshot, never letting a failure escape."""
+        if self.history is None:
+            return
+        try:
+            self.history.record(entry.path, content, min_interval)
+        except (OSError, ValueError):
+            pass
 
     def create_entry(self, name: str) -> Entry:
         name = safe_entry_name(name) or "untitled"
@@ -255,6 +492,11 @@ class VaultStorage:
             new_path = self.vault_dir / f"{new_name}.md"
         new_path.parent.mkdir(parents=True, exist_ok=True)
         entry.path.rename(new_path)
+        if self.history is not None:
+            try:
+                self.history.rename(entry.path, new_path)
+            except (OSError, ValueError):
+                pass
         rel = new_path.relative_to(self.vault_dir).with_suffix("")
         return Entry(path=new_path, name=str(rel), modified=new_path.stat().st_mtime)
 
@@ -3025,6 +3267,103 @@ class ExportFormatDialog:
         return self.dialog
 
 
+def _friendly_time(when: datetime) -> str:
+    """A snapshot time as a person would say it, in local time."""
+    local = when.astimezone()
+    clock = (f"{local.hour % 12 or 12}:{local.minute:02d} "
+             f"{'AM' if local.hour < 12 else 'PM'}")
+    days = (datetime.now().date() - local.date()).days
+    if days == 0:
+        return f"Today {clock}"
+    if days == 1:
+        return f"Yesterday {clock}"
+    if 1 < days < 7:
+        return f"{local.strftime('%A')} {clock}"
+    return f"{local.day} {local.strftime('%b')} {clock}"
+
+
+class VersionHistoryDialog:
+    """Earlier versions of the open note, newest first.
+
+    Enter resolves with the chosen version's text; the caller loads it
+    into the editor. Each row shows its word count against the text as it
+    stands now, and the preview opens at the first line where the version
+    differs -- which is the part anyone looking for lost writing needs.
+    """
+
+    def __init__(self, versions, current: str):
+        self.future = asyncio.Future()
+        self._current = current
+        self._texts = {}
+        now_words = len(current.split())
+        items = []
+        for when, f in versions:
+            try:
+                text = f.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            key = str(f)
+            self._texts[key] = text
+            words = len(text.split())
+            if text == current:
+                note = "same as now"
+            else:
+                delta = words - now_words
+                note = f"{words:,} words ({'+' if delta >= 0 else '−'}{abs(delta):,})"
+            items.append((key, f"  {_friendly_time(when)}", f"{note} "))
+        self.has_versions = bool(items)
+        if not items:
+            items = [("__empty__",
+                      "  No earlier versions yet. They are kept as you write.",
+                      "")]
+        self.list = SelectableList(on_select=self._select)
+        self.list.set_items(items)
+        self.list.on_navigate = lambda: get_app().invalidate()
+
+        @self.list._kb.add("escape", eager=True)
+        def _esc(event):
+            self.cancel()
+
+        self.dialog = Dialog(
+            title="Version history — enter: restore",
+            body=HSplit([
+                self.list,
+                Window(height=1, char="─", style="class:hint"),
+                Window(FormattedTextControl(self._preview),
+                       height=8, wrap_lines=True),
+            ]),
+            buttons=[Button(text="Close", handler=self.cancel)],
+            modal=True,
+            width=D(preferred=76, max=96),
+        )
+
+    def _preview(self):
+        if not self.has_versions:
+            return [("", "")]
+        key = self.list.items[self.list.selected_index][0]
+        text = self._texts.get(key, "")
+        if text == self._current:
+            return [("class:hint", " Identical to the text you have open.")]
+        old, new = text.split("\n"), self._current.split("\n")
+        first = next((i for i, (a, b) in enumerate(zip(old, new)) if a != b),
+                     min(len(old), len(new)))
+        shown = old[max(first - 1, 0):first + 7]
+        head = (" From the first difference:" if first
+                else " From the top:")
+        return [("class:hint", head + "\n"), ("", "\n".join(shown))]
+
+    def _select(self, key):
+        if key in self._texts and not self.future.done():
+            self.future.set_result(self._texts[key])
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
 def _file_manager_name() -> str:
     """What the host's file manager is called, for labels."""
     if sys.platform == "darwin":
@@ -4533,6 +4872,10 @@ def create_app(storage):
         state.current_entry = entry
         state.editor_dirty = False
         content = state.storage.read_entry(entry)
+        # The note as found, before any editing: this is what catches a
+        # change made in Obsidian or synced from another device, and it
+        # is the version to go back to if this session goes wrong.
+        state.storage.snapshot(entry, content)
         try:
             state.editor_disk_mtime = entry.path.stat().st_mtime
         except OSError:
@@ -5701,6 +6044,10 @@ def create_app(storage):
             conflict_msg = f"Sync conflict — saved as '{conflict_name}'."
         else:
             do_save(notify=False)
+            # Saves snapshot at most every few minutes; leaving always
+            # records, so each session's last text is in the history.
+            if state.current_entry:
+                state.storage.snapshot(state.current_entry, editor_area.text)
         edited = state.current_entry
         # Clear any lingering editor notification (e.g. the "press esc
         # again" prompt) so it doesn't carry onto the journal status line.
@@ -5853,6 +6200,32 @@ def create_app(storage):
             new_text = f"---\n{block}\n---\n" + text
         editor_area.buffer.set_document(Document(new_text, 0), bypass_readonly=True)
         show_notification(state, "Frontmatter inserted.")
+
+    async def cmd_version_history():
+        entry = state.current_entry
+        if not entry:
+            return
+        current = editor_area.text
+        versions = []
+        if state.storage.history is not None:
+            try:
+                versions = state.storage.history.versions(entry.path, current)
+            except (OSError, ValueError):
+                versions = []
+        text = await show_dialog_as_float(
+            state, VersionHistoryDialog(versions, current))
+        if text is None or text == current:
+            return
+        # What is being replaced becomes the newest version, so a restore
+        # can be walked back from the history as well as with undo.
+        state.storage.snapshot(entry, current)
+        buf = editor_area.buffer
+        buf.save_to_undo_stack()
+        buf.set_document(
+            Document(text, min(buf.cursor_position, len(text))),
+            bypass_readonly=True)
+        show_notification(
+            state, f"Restored an earlier version — {_key('^z')} to undo.")
 
     # ── Get commands for palette ─────────────────────────────────────
 
@@ -6878,6 +7251,7 @@ def create_app(storage):
                     ("Return to Folio", "Esc", return_to_journal),
                     ("Save", "^S", lambda: do_save()),
                     ("Spell check", "Check spelling", cmd_spell_check),
+                    ("Version history", "Earlier versions", cmd_version_history),
                 ]
             else:
                 cmds = [
@@ -7496,7 +7870,8 @@ def main() -> None:
         except (AttributeError, ValueError, OSError, termios.error):
             pass
 
-    app = create_app(VaultStorage(data_dir))
+    app = create_app(VaultStorage(
+        data_dir, history=NoteHistory(_config_root("folio") / "history")))
     result = _run_quietly(app)
     cleanup = getattr(app, "cleanup", None)
     if cleanup:
