@@ -21,7 +21,6 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
 
@@ -2029,38 +2028,67 @@ def _resolve_bib_path(yaml: dict, vault_dir: Path) -> Optional[Path]:
 # ════════════════════════════════════════════════════════════════════════
 
 
+def _match_rank(query: str, name: str) -> Optional[int]:
+    """How well a typed query matches a name; lower is better, None is no.
+
+    0  the name starts with it              "ve"  -> Version history
+    1  a later word starts with it          "syl" -> 2627.h.12.syllabus
+    2  it appears inside a word             "ve"  -> Save
+    3  it spells the words' initials        "vh"  -> Version history
+
+    Words are runs of letters or of digits, so a note's dots, dashes and
+    folder slashes separate words as spaces do, and so does the join in a
+    citekey: "1943" and "abol" both start words in lewis1943abolition. A query with spaces
+    matches when every part does ("barfield theory" finds
+    commonplace.barfield.theory), ranked by its weakest part.
+
+    Nothing looser. The searches used to score every substring alike --
+    so ties fell back to alphabetical or storage order, and "ve" put Save
+    above Version history -- and let near-misses in besides, offering
+    names that did not contain the letters at all.
+    """
+    q = query.strip().lower()
+    n = name.lower()
+    if not q:
+        return 0
+    if n.startswith(q):
+        return 0
+    if q in n:
+        at_word = any(n.startswith(q, m.start())
+                      for m in re.finditer(r"[a-z]+|[0-9]+", n))
+        return 1 if at_word else 2
+    parts = q.split()
+    if len(parts) > 1:
+        ranks = [_match_rank(p, name) for p in parts]
+        if all(r is not None and r <= 2 for r in ranks):
+            return max(1, max(ranks))
+        return None
+    initials = "".join(w[0] for w in re.findall(r"[a-z]+|[0-9]+", n))
+    if len(q) > 1 and initials.startswith(q):
+        return 3
+    return None
+
+
+def _ranked(items, query: str, key) -> list:
+    """items that match query, best first; ties keep the given order."""
+    if not query.strip():
+        return list(items)
+    hits = []
+    for i, item in enumerate(items):
+        rank = _match_rank(query, key(item))
+        if rank is not None:
+            hits.append((rank, i, item))
+    hits.sort(key=lambda h: (h[0], h[1]))
+    return [item for _, _, item in hits]
+
+
 def fuzzy_filter(bib_entries: list[BibEntry], query: str) -> list[BibEntry]:
-    if not query:
-        return list(bib_entries)
-    q = query.lower()
-    scored: list[tuple[float, BibEntry]] = []
-    for e in bib_entries:
-        hay = e.citekey.lower()
-        if q in hay:
-            scored.append((100.0, e))
-        else:
-            ratio = SequenceMatcher(None, q, hay).ratio() * 100
-            if ratio > 30:
-                scored.append((ratio, e))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [e for _, e in scored]
+    return _ranked(bib_entries, query, lambda e: e.citekey)
 
 
 def fuzzy_filter_entries(entries: list[Entry], query: str) -> list[Entry]:
-    if not query:
-        return list(entries)
-    q = query.lower()
-    scored: list[tuple[float, Entry]] = []
-    for e in entries:
-        hay = e.name.lower()
-        if q in hay:
-            scored.append((100.0, e))
-        else:
-            ratio = SequenceMatcher(None, q, hay).ratio() * 100
-            if ratio > 70:
-                scored.append((ratio, e))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [e for _, e in scored]
+    # Most recently modified first among equal matches, as the list is.
+    return _ranked(entries, query, lambda e: e.name)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -3900,35 +3928,6 @@ class CitePickerDialog:
         return self.dialog
 
 
-def _palette_rank(query: str, name: str) -> Optional[int]:
-    """How well a typed query matches a command name; lower is better.
-
-    0  the name starts with it            "ve" -> Version history
-    1  a later word starts with it        "hi" -> Version history
-    2  it appears inside a word           "ve" -> Save
-    3  it spells the words' initials      "vh" -> Version history
-    None otherwise -- no loose similarity matching. It used to score every
-    substring alike and let near-misses in besides, so "ve" put Save
-    above Version history, alphabetically, and offered commands that
-    did not contain the letters at all.
-    """
-    q = query.strip().lower()
-    n = name.lower()
-    if not q:
-        return 0
-    if n.startswith(q):
-        return 0
-    words = re.findall(r"[a-z0-9]+", n)
-    if any(w.startswith(q) for w in words[1:]):
-        return 1
-    if q in n:
-        return 2
-    initials = "".join(w[0] for w in words)
-    if len(q) > 1 and initials.startswith(q.replace(" ", "")):
-        return 3
-    return None
-
-
 class CommandPaletteDialog:
     """Command palette with fuzzy search."""
 
@@ -3984,7 +3983,7 @@ class CommandPaletteDialog:
         else:
             ranked = []
             for i, cmd in enumerate(self.all_commands):
-                rank = _palette_rank(query, cmd[0])
+                rank = _match_rank(query, cmd[0])
                 if rank is not None:
                     ranked.append((rank, i, cmd))
             ranked.sort(key=lambda x: (x[0], x[1]))

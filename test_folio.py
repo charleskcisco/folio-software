@@ -2095,7 +2095,7 @@ def test_palette_rank():
     cmds = ["Export", "Find", "Insert blank footnote", "Insert citation",
             "Save", "Spell check", "Version history"]
     def order(q):
-        hits = [(folio._palette_rank(q, c), i, c) for i, c in enumerate(cmds)]
+        hits = [(folio._match_rank(q, c), i, c) for i, c in enumerate(cmds)]
         return [c for r, _, c in sorted(h for h in hits if h[0] is not None)]
     # A prefix beats a match inside a word, whatever the alphabet says.
     assert order("ve") == ["Version history", "Save"]
@@ -2107,6 +2107,31 @@ def test_palette_rank():
     assert order("xyz") == []
     assert order("sq") == []
     print("  Palette ranking OK")
+
+
+def test_note_and_citation_search_ranking():
+    E = lambda name, mod: Entry(path=Path(f"/tmp/{name}.md"), name=name, modified=mod)
+    notes = [E("2627.h.12.syllabus", 5), E("commonplace.barfield.theory", 4),
+             E("essay", 3), E("classes/syllabus draft", 2), E("messy", 1)]
+    names = lambda q: [e.name for e in fuzzy_filter_entries(notes, q)]
+    # Word starts across dots and folders, in the list's own order.
+    assert names("syl") == ["2627.h.12.syllabus", "classes/syllabus draft"]
+    # A prefix outranks the same letters inside a word.
+    assert names("ess") == ["essay", "messy"]
+    # Spaces: every part must match, wherever it falls.
+    assert names("barfield theory") == ["commonplace.barfield.theory"]
+    assert names("barfield essay") == []
+    # No near-misses.
+    assert names("sylabus") == []
+    bib = [BibEntry(citekey=k) for k in
+           ("smith2020", "lewis1943abolition", "abolitionists1990")]
+    keys = lambda q: [b.citekey for b in fuzzy_filter(bib, q)]
+    assert keys("abol") == ["abolitionists1990", "lewis1943abolition"]
+    assert keys("1943") == ["lewis1943abolition"]
+    # The year starts a word, so it outranks the same digits mid-number.
+    bib.append(BibEntry(citekey="jones21943"))
+    assert keys("1943") == ["lewis1943abolition", "jones21943"]
+    print("  Note and citation search ranking OK")
 
 
 if __name__ == "__main__":
@@ -2288,6 +2313,7 @@ if __name__ == "__main__":
 
     print("Testing palette ranking...")
     test_palette_rank()
+    test_note_and_citation_search_ranking()
     print("  \u2713 Palette tests passed\n")
 
     print("Testing aspell command line...")
